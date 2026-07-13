@@ -181,3 +181,58 @@ def test_tier_sobe_duas_vezes_apos_dois_emprestimos(client, db_session):
         json={"valor_sats": 15000},
     )
     assert resp.json()["tier"] == 3  # chegou ao tier máximo
+
+
+def test_cadastro_com_codigo_indicacao_cria_aval_e_libera_tier_1(client, db_session):
+    """Regra: cadastrar com codigo_indicacao cria Aval automaticamente e sobe tier 0→1."""
+    # 1. Criar avalista (tier 0 por padrão)
+    avalista = _criar_usuaria(client, "1234")
+
+    # 2. Criar nova usuária com o codigo_indicacao da avalista
+    resp = client.post("/usuarias", json={
+        "pin": "5678",
+        "codigo_indicacao": avalista["codigo_indicacao"],
+    })
+    assert resp.status_code == 201
+    nova = resp.json()
+
+    # 3. Nova usuária nasce com tier 1 (aval recebido)
+    assert nova["tier"] == 1
+    assert nova["codigo_indicacao_usado"] == avalista["codigo_indicacao"]
+
+    # 4. Já pode pedir empréstimo (tier 1 = 5.000 sats)
+    resp = client.post(f"/emprestimos/{nova['identificador']}")
+    assert resp.status_code == 201
+
+
+def test_get_convite_disponivel_apenas_para_tier_3(client, db_session):
+    """Regra: GET /usuarias/me/convite só funciona para tier 3+."""
+    # Criar usuária tier 0 e logar
+    u = _criar_usuaria(client, "1234")
+    resp = client.post("/login", json={
+        "identificador": u["identificador"],
+        "pin": "1234",
+    })
+    token = resp.json()["token"]
+
+    # Tier 0 → 403
+    resp = client.get("/usuarias/me/convite", headers={
+        "Authorization": f"Bearer {token}",
+    })
+    assert resp.status_code == 403
+
+    # Promover para tier 3 manualmente no banco
+    usuaria = db_session.query(Usuaria).filter(
+        Usuaria.identificador == u["identificador"]
+    ).first()
+    usuaria.tier = 3
+    db_session.commit()
+
+    # Tier 3 → 200 com codigo e link
+    resp = client.get("/usuarias/me/convite", headers={
+        "Authorization": f"Bearer {token}",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["codigo"] == u["codigo_indicacao"]
+    assert data["link"] == f"/convite/{u['codigo_indicacao']}"

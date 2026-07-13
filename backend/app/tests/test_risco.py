@@ -10,6 +10,7 @@ from app.services.risco import (
     ao_atrasar,
     ao_quitar,
     limite_por_tier,
+    pode_avalizar,
     pode_emprestar,
 )
 
@@ -163,3 +164,16 @@ def test_usuaria_congelada_nao_pode_emprestar(db_session):
     )
 
     assert pode_emprestar(usuaria) is False
+
+
+def test_pode_avalizar_exige_tier_3(db_session):
+    """Regra: apenas tier 3+ pode gerar links de indicação."""
+    u0 = _criar_usuaria(db_session, tier=0)
+    u1 = _criar_usuaria(db_session, tier=1)
+    u2 = _criar_usuaria(db_session, tier=2)
+    u3 = _criar_usuaria(db_session, tier=3)
+
+    assert pode_avalizar(u0) is False
+    assert pode_avalizar(u1) is False
+    assert pode_avalizar(u2) is False
+    assert pode_avalizar(u3) is True

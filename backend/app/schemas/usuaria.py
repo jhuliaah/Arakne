@@ -34,3 +34,10 @@ class UsuariaResponse(BaseModel):
     tier_congelado: bool
     padroes_completos: int
     criado_em: datetime
+
+
+class ConviteResponse(BaseModel):
+    """Response for GET /usuarias/me/convite — invite link data."""
+
+    codigo: str
+    link: str

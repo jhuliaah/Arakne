@@ -17,10 +17,12 @@ import {
   getEmprestimoIds,
   getMe,
   getIdentificador,
+  getConvite,
   pagarEmprestimo,
   addEmprestimoId,
   getEmprestimo,
 } from "../api";
+import type { ConviteResponse } from "../api";
 import type { Emprestimo, Usuaria } from "../types";
 
 interface FinancialPageProps {
@@ -47,6 +49,8 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [convite, setConvite] = useState<ConviteResponse | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -88,6 +92,16 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
     // Sort by most recent first
     results.sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime());
     setEmprestimos(results);
+
+    // Load convite if user is tier 3+
+    const userMe = retryMe ?? me;
+    if (userMe && userMe.tier >= 3) {
+      const conviteData = await getConvite(retryToken ?? token);
+      if (conviteData) setConvite(conviteData);
+    } else {
+      setConvite(null);
+    }
+
     setLoading(false);
   }, []);
 
@@ -236,6 +250,36 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
             </ul>
           )}
         </div>
+
+        {/* Invite link — only for tier 3+ (disguised as "convidar aprendizes") */}
+        {convite && (
+          <div className="financial__invite">
+            <h3 className="financial__history-title">Convidar Aprendiz</h3>
+            <p className="financial__invite-text">
+              Compartilhe este link para convidar uma nova aprendiz:
+            </p>
+            <div className="financial__invite-link">
+              <input
+                type="text"
+                readOnly
+                value={window.location.origin + convite.link}
+                className="financial__invite-input"
+                onClick={(e) => (e.target as HTMLInputElement).select()}
+              />
+              <button
+                className="financial__btn financial__btn--small"
+                onClick={() => {
+                  const fullLink = window.location.origin + convite.link;
+                  navigator.clipboard.writeText(fullLink);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }}
+              >
+                {copied ? "Copiado!" : "Copiar"}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Pattern progress (disguised tier info) */}
         <div className="financial__progress">

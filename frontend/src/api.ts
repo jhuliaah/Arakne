@@ -169,6 +169,25 @@ export async function getEmprestimo(id: number): Promise<Emprestimo | null> {
   }
 }
 
+// ── Convite (invite link) ──────────────────────────────────
+
+export interface ConviteResponse {
+  codigo: string;
+  link: string;
+}
+
+export async function getConvite(token: string): Promise<ConviteResponse | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/usuarias/me/convite`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
 // ── Composite helpers ───────────────────────────────────────
 
 /** Ensure a token exists — login if needed. Returns token or null. */

@@ -490,6 +490,45 @@ body {
   font-size: 0.85rem;
 }
 
+/* ── Invite link ──────────────────────────────────────────── */
+.financial__invite {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  box-shadow: var(--shadow);
+  margin-bottom: 1rem;
+  border-left: 4px solid var(--color-accent);
+}
+
+.financial__invite-text {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin-bottom: 0.75rem;
+}
+
+.financial__invite-link {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.financial__invite-input {
+  flex: 1;
+  border: 1px solid var(--color-bg);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--color-text);
+  background: var(--color-bg);
+  outline: none;
+  font-family: monospace;
+}
+
+.financial__invite-input:focus {
+  border-color: var(--color-primary);
+}
+
+/* ── Progress ─────────────────────────────────────────────── */
 .financial__progress {
   background: var(--color-surface);
   border-radius: var(--radius-sm);

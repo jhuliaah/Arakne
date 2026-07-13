@@ -162,6 +162,25 @@ curl http://localhost:8000/usuarias/me \
 
 Resposta (200): mesmo formato do cadastro, sem `pin_hash`, `avalista_id`, ou `id` interno.
 
+#### GET /usuarias/me/convite — gerar link de convite (tier 3+ apenas)
+
+```bash
+curl http://localhost:8000/usuarias/me/convite \
+  -H "Authorization: Bearer s3kr3t_t0k3n..."
+```
+
+Resposta (200):
+```json
+{
+  "codigo": "Rt3_mN9p",
+  "link": "/convite/Rt3_mN9p"
+}
+```
+
+Disponível apenas para usuárias em tier 3 ou superior (`pode_avalizar`).
+Ao cadastrar uma nova usuária com esse `codigo_indicacao`, o Aval é criado
+automaticamente e a nova usuária já nasce com tier 1.
+
 ---
 
 ## Integração com LNbits
@@ -326,7 +345,7 @@ arakne/
 │       │   ├── __init__.py
 │       │   ├── health.py      # GET /health
 │       │   ├── auth.py        # POST /login
-│       │   ├── usuarias.py    # POST /usuarias, GET /usuarias/me
+│       │   ├── usuarias.py    # POST /usuarias, GET /usuarias/me, GET /usuarias/me/convite
 │       │   ├── avais.py       # POST /avais
 │       │   └── emprestimos.py # POST /emprestimos, POST /pagamento, GET /status
 │       ├── services/

@@ -42,6 +42,14 @@ def ao_receber_aval(usuaria: Usuaria) -> None:
         usuaria.tier = 1
 
 
+def pode_avalizar(usuaria: Usuaria) -> bool:
+    """Verifica se a usuária pode gerar links de indicação (dar aval).
+
+    Regra: apenas tier >= 3 pode gerar links de indicação.
+    """
+    return usuaria.tier >= 3
+
+
 # ── Funções principais ───────────────────────────────────────
 
 def pode_emprestar(usuaria: Usuaria) -> bool:
