@@ -1,20 +1,31 @@
-/** Search bar — filters patterns and detects the secret search gesture. */
+/** Search bar — filters patterns and detects secret search gestures.
+
+  Two secret terms exist:
+  - SECRET_SEARCH → reveals the real financial screen
+  - DECOY_SEARCH  → reveals a decoy catalog with zero financial traces
+*/
 
 import { useState } from "react";
-import { SECRET_SEARCH } from "../data/patterns";
+import { DECOY_SEARCH, SECRET_SEARCH } from "../data/patterns";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
   onRevealFinancial: () => void;
+  onRevealDecoy?: () => void;
 }
 
-export default function SearchBar({ onSearch, onRevealFinancial }: SearchBarProps) {
+export default function SearchBar({ onSearch, onRevealFinancial, onRevealDecoy }: SearchBarProps) {
   const [query, setQuery] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim().toLowerCase() === SECRET_SEARCH.toLowerCase()) {
+    const q = query.trim().toLowerCase();
+    if (q === SECRET_SEARCH.toLowerCase()) {
       onRevealFinancial();
+      return;
+    }
+    if (onRevealDecoy && q === DECOY_SEARCH.toLowerCase()) {
+      onRevealDecoy();
       return;
     }
     onSearch(query);

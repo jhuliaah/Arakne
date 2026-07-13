@@ -116,6 +116,13 @@ body {
   margin-bottom: 1.25rem;
 }
 
+.catalog__subtitle {
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  margin-top: -0.75rem;
+  margin-bottom: 1.25rem;
+}
+
 .catalog__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

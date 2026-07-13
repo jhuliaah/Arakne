@@ -3,17 +3,21 @@
   Routes:
     /                    → Catalog (default, self-onboards silently)
     /convite/{codigo}    → Invite (shows catalog, creates aval silently)
-  The financial screen is revealed by the search gesture (typing "Ponto Arakne"),
-  not by URL navigation.
+
+  Three views are revealed by search gestures (not URL navigation):
+  - "Ponto Arakne"       → Financial screen (real, disguised)
+  - "Galeria de Padrões" → Decoy catalog (looks real, zero financial traces)
+  - Any other query      → Normal pattern filter
 */
 
 import { useState, useEffect } from "react";
 import CatalogPage from "./pages/CatalogPage";
+import DecoyPage from "./pages/DecoyPage";
 import FinancialPage from "./pages/FinancialPage";
 import InvitePage from "./pages/InvitePage";
 import { ensureOnboarding } from "./api";
 
-type View = "catalog" | "financial";
+type View = "catalog" | "financial" | "decoy";
 
 function getInviteCodigo(): string | null {
   const match = window.location.pathname.match(/^\/convite\/(.+)$/);
@@ -23,18 +27,17 @@ function getInviteCodigo(): string | null {
 export default function App() {
   const [view, setView] = useState<View>("catalog");
   const [inviteCodigo] = useState<string | null>(getInviteCodigo());
-  const [onboardingDone, setOnboardingDone] = useState(false);
 
   // Silent onboarding — creates user + aval in the background
   useEffect(() => {
     let cancelled = false;
-    ensureOnboarding(inviteCodigo).then((ok) => {
-      if (!cancelled) setOnboardingDone(true);
+    ensureOnboarding(inviteCodigo).then(() => {
+      if (!cancelled) return;
     });
     return () => { cancelled = true; };
   }, [inviteCodigo]);
 
-  // Handle browser back button
+  // Handle browser back button — always returns to catalog
   useEffect(() => {
     const handler = () => setView("catalog");
     window.addEventListener("popstate", handler);
@@ -45,9 +48,24 @@ export default function App() {
     return <FinancialPage onBack={() => setView("catalog")} />;
   }
 
-  if (inviteCodigo) {
-    return <InvitePage codigo={inviteCodigo} onRevealFinancial={() => setView("financial")} />;
+  if (view === "decoy") {
+    return <DecoyPage onBack={() => setView("catalog")} />;
   }
 
-  return <CatalogPage onRevealFinancial={() => setView("financial")} />;
+  if (inviteCodigo) {
+    return (
+      <InvitePage
+        codigo={inviteCodigo}
+        onRevealFinancial={() => setView("financial")}
+        onRevealDecoy={() => setView("decoy")}
+      />
+    );
+  }
+
+  return (
+    <CatalogPage
+      onRevealFinancial={() => setView("financial")}
+      onRevealDecoy={() => setView("decoy")}
+    />
+  );
 }

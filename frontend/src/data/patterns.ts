@@ -55,3 +55,7 @@ export const patterns: Pattern[] = [
 
 /** Secret search term that reveals the financial screen. */
 export const SECRET_SEARCH = "Ponto Arakne";
+
+/** Second secret term — reveals a decoy catalog with zero financial traces.
+ *  Someone snooping for "hidden" screens finds this instead of the real one. */
+export const DECOY_SEARCH = "Galeria de Padrões";

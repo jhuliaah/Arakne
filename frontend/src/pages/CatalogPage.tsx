@@ -8,10 +8,11 @@ import { patterns } from "../data/patterns";
 
 interface CatalogPageProps {
   onRevealFinancial: () => void;
+  onRevealDecoy?: () => void;
   inviteCodigo?: string | null;
 }
 
-export default function CatalogPage({ onRevealFinancial, inviteCodigo }: CatalogPageProps) {
+export default function CatalogPage({ onRevealFinancial, onRevealDecoy, inviteCodigo }: CatalogPageProps) {
   const [query, setQuery] = useState("");
   const [filterApplied, setFilterApplied] = useState(false);
 
@@ -30,6 +31,7 @@ export default function CatalogPage({ onRevealFinancial, inviteCodigo }: Catalog
           <SearchBar
             onSearch={(q) => { setQuery(q); setFilterApplied(true); }}
             onRevealFinancial={onRevealFinancial}
+            onRevealDecoy={onRevealDecoy}
           />
         </div>
 

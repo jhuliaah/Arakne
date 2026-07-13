@@ -9,8 +9,15 @@ import CatalogPage from "./CatalogPage";
 interface InvitePageProps {
   codigo: string;
   onRevealFinancial: () => void;
+  onRevealDecoy?: () => void;
 }
 
-export default function InvitePage({ codigo, onRevealFinancial }: InvitePageProps) {
-  return <CatalogPage onRevealFinancial={onRevealFinancial} inviteCodigo={codigo} />;
+export default function InvitePage({ codigo, onRevealFinancial, onRevealDecoy }: InvitePageProps) {
+  return (
+    <CatalogPage
+      onRevealFinancial={onRevealFinancial}
+      onRevealDecoy={onRevealDecoy}
+      inviteCodigo={codigo}
+    />
+  );
 }
