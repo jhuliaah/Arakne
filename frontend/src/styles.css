@@ -572,6 +572,202 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* ── Modal overlay ───────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+  animation: slideUp 0.25s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal__title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  margin-bottom: 0.75rem;
+}
+
+.modal__text {
+  font-size: 0.95rem;
+  color: var(--color-text);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.modal__hint {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin-bottom: 1rem;
+}
+
+.modal__label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 0.5rem;
+}
+
+.modal__input {
+  width: 100%;
+  border: 1px solid var(--color-bg);
+  border-radius: var(--radius-sm);
+  padding: 0.625rem 0.75rem;
+  font-size: 1.1rem;
+  color: var(--color-text);
+  background: var(--color-bg);
+  outline: none;
+  margin-bottom: 0.75rem;
+}
+
+.modal__input:focus {
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+}
+
+.modal__quick-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.modal__actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.financial__btn--secondary {
+  background: var(--color-bg);
+  color: var(--color-muted);
+}
+
+.financial__btn--secondary:hover:not(:disabled) {
+  background: #e0d5c0;
+}
+
+/* ── Repayment result ─────────────────────────────────────── */
+.repay-result {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.repay-result__icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+  animation: bounceIn 0.4s ease;
+}
+
+@keyframes bounceIn {
+  0% { transform: scale(0); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.repay-result__title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  margin-bottom: 0.5rem;
+}
+
+.repay-result__text {
+  font-size: 0.95rem;
+  color: var(--color-muted);
+}
+
+/* ── Invoice box ──────────────────────────────────────────── */
+.invoice-box {
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  padding: 0.875rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--color-secondary);
+}
+
+.invoice-box__label {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.invoice-box__code {
+  display: block;
+  font-family: monospace;
+  font-size: 0.7rem;
+  color: var(--color-text);
+  word-break: break-all;
+  line-height: 1.5;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+/* ── Tier upgrade banner ─────────────────────────────────── */
+.financial__tier-upgrade {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(92, 138, 92, 0.12);
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-success);
+  animation: slideDown 0.4s ease;
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.financial__tier-upgrade-emoji {
+  font-size: 1.25rem;
+}
+
+.financial__card--highlight {
+  animation: highlightPulse 2s ease;
+}
+
+@keyframes highlightPulse {
+  0%, 100% { box-shadow: var(--shadow); }
+  50% { box-shadow: 0 0 0 3px rgba(92, 138, 92, 0.3), var(--shadow); }
+}
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (min-width: 640px) {
   .catalog__grid {

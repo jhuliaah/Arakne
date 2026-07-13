@@ -52,6 +52,21 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
   const [convite, setConvite] = useState<ConviteResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Repayment modal state
+  const [repayModal, setRepayModal] = useState<{
+    open: boolean;
+    emprestimo: Emprestimo | null;
+    valor: string;
+    processing: boolean;
+    result: { quitado: boolean; tier: number; saldo_devedor: number } | null;
+  }>({ open: false, emprestimo: null, valor: "", processing: false, result: null });
+
+  // Invoice display state (shown after requesting a kit)
+  const [invoiceDisplay, setInvoiceDisplay] = useState<Emprestimo | null>(null);
+
+  // Tier upgrade animation
+  const [tierUpgraded, setTierUpgraded] = useState<number | null>(null);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -61,9 +76,9 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
       setLoading(false);
       return;
     }
-    const me = await getMe(token);
+    let me = await getMe(token);
+    let activeToken = token;
     if (!me) {
-      // Token might be stale — clear and retry once
       localStorage.removeItem("arakne_token");
       const retryToken = await ensureToken();
       if (!retryToken) {
@@ -71,16 +86,15 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
         setLoading(false);
         return;
       }
-      const retryMe = await getMe(retryToken);
-      if (!retryMe) {
+      me = await getMe(retryToken);
+      activeToken = retryToken;
+      if (!me) {
         setError("Não foi possível carregar seus dados. Tente novamente.");
         setLoading(false);
         return;
       }
-      setUsuaria(retryMe);
-    } else {
-      setUsuaria(me);
     }
+    setUsuaria(me);
 
     // Load emprestimos from stored IDs
     const ids = getEmprestimoIds();
@@ -89,14 +103,12 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
       const emp = await getEmprestimo(id);
       if (emp) results.push(emp);
     }
-    // Sort by most recent first
     results.sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime());
     setEmprestimos(results);
 
     // Load convite if user is tier 3+
-    const userMe = retryMe ?? me;
-    if (userMe && userMe.tier >= 3) {
-      const conviteData = await getConvite(retryToken ?? token);
+    if (me && me.tier >= 3) {
+      const conviteData = await getConvite(activeToken);
       if (conviteData) setConvite(conviteData);
     } else {
       setConvite(null);
@@ -123,6 +135,8 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
     if (emp) {
       addEmprestimoId(emp.id);
       setEmprestimos((prev) => [emp, ...prev]);
+      // Show invoice display
+      setInvoiceDisplay(emp);
       await loadData();
     } else {
       setError("Não foi possível solicitar o kit no momento.");
@@ -130,16 +144,68 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
     setActionLoading(false);
   };
 
-  const handleConcluirPadrao = async (emprestimoId: number, valor: number) => {
-    setActionLoading(true);
-    const result = await pagarEmprestimo(emprestimoId, valor);
-    if (result) {
-      await loadData();
-    } else {
-      setError("Não foi possível concluir o padrão.");
-    }
-    setActionLoading(false);
+  // ── Repayment handlers ───────────────────────────────────────
+
+  const openRepayModal = (emp: Emprestimo) => {
+    setRepayModal({
+      open: true,
+      emprestimo: emp,
+      valor: String(emp.valor_sats),
+      processing: false,
+      result: null,
+    });
   };
+
+  const closeRepayModal = () => {
+    setRepayModal({ open: false, emprestimo: null, valor: "", processing: false, result: null });
+  };
+
+  const handleRepay = async () => {
+    const emp = repayModal.emprestimo;
+    if (!emp) return;
+    const valor = parseInt(repayModal.valor, 10);
+    if (!valor || valor <= 0) return;
+
+    setRepayModal((prev) => ({ ...prev, processing: true }));
+    const result = await pagarEmprestimo(emp.id, valor);
+
+    if (result) {
+      // Show result in modal
+      setRepayModal((prev) => ({
+        ...prev,
+        processing: false,
+        result: {
+          quitado: result.quitado,
+          tier: result.tier,
+          saldo_devedor: result.saldo_devedor,
+        },
+      }));
+
+      // If tier changed (quitado), trigger the upgrade animation
+      if (result.quitado && usuaria && result.tier > usuaria.tier) {
+        setTierUpgraded(result.tier);
+        setTimeout(() => setTierUpgraded(null), 3000);
+      }
+
+      // Reload all data after a short delay so the user sees the result
+      setTimeout(async () => {
+        await loadData();
+        closeRepayModal();
+      }, 1800);
+    } else {
+      setRepayModal((prev) => ({ ...prev, processing: false }));
+      setError("Não foi possível concluir o padrão. Tente novamente.");
+      closeRepayModal();
+    }
+  };
+
+  // ── Invoice display handlers ─────────────────────────────────
+
+  const closeInvoiceDisplay = () => {
+    setInvoiceDisplay(null);
+  };
+
+  // ── Render ───────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -170,8 +236,16 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
           </div>
         )}
 
+        {/* Tier upgrade banner */}
+        {tierUpgraded !== null && (
+          <div className="financial__tier-upgrade">
+            <span className="financial__tier-upgrade-emoji">🎉</span>
+            <span>Nível subiu para {TIER_LABELS[tierUpgraded] ?? tierUpgraded}!</span>
+          </div>
+        )}
+
         {/* Tier / Level card */}
-        <div className="financial__card financial__card--tier">
+        <div className={`financial__card financial__card--tier ${tierUpgraded !== null ? "financial__card--highlight" : ""}`}>
           <div className="financial__card-label">Nível Atual</div>
           <div className="financial__tier-display">
             <span className="financial__tier-number">{usuaria?.tier ?? 0}</span>
@@ -236,7 +310,7 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
                     {emp.status === "ativo" ? (
                       <button
                         className="financial__btn financial__btn--small"
-                        onClick={() => handleConcluirPadrao(emp.id, emp.valor_sats)}
+                        onClick={() => openRepayModal(emp)}
                         disabled={actionLoading}
                       >
                         Concluir Padrão
@@ -251,7 +325,7 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
           )}
         </div>
 
-        {/* Invite link — only for tier 3+ (disguised as "convidar aprendizes") */}
+        {/* Invite link — only for tier 3+ */}
         {convite && (
           <div className="financial__invite">
             <h3 className="financial__history-title">Convidar Aprendiz</h3>
@@ -281,7 +355,7 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
           </div>
         )}
 
-        {/* Pattern progress (disguised tier info) */}
+        {/* Pattern progress */}
         <div className="financial__progress">
           <div className="financial__progress-row">
             <span>Padrões concluídos</span>
@@ -289,6 +363,126 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
           </div>
         </div>
       </main>
+
+      {/* ── Repayment modal ─────────────────────────────────── */}
+      {repayModal.open && repayModal.emprestimo && (
+        <div className="modal-overlay" onClick={closeRepayModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            {repayModal.result ? (
+              // ── Result view ──
+              <div className="repay-result">
+                <div className="repay-result__icon">
+                  {repayModal.result.quitado ? "🎉" : "✅"}
+                </div>
+                <h3 className="repay-result__title">
+                  {repayModal.result.quitado ? "Padrão Concluído!" : "Pagamento registrado!"}
+                </h3>
+                <p className="repay-result__text">
+                  {repayModal.result.quitado
+                    ? `Seu nível subiu para ${TIER_LABELS[repayModal.result.tier] ?? repayModal.result.tier}!`
+                    : `Materiais em uso: ${repayModal.result.saldo_devedor.toLocaleString("pt-BR")}`}
+                </p>
+              </div>
+            ) : (
+              // ── Input view ──
+              <>
+                <h3 className="modal__title">Concluir Padrão</h3>
+                <p className="modal__text">
+                  Kit #{repayModal.emprestimo.id} — Valor total:{" "}
+                  {repayModal.emprestimo.valor_sats.toLocaleString("pt-BR")}
+                </p>
+
+                {usuaria && usuaria.saldo_devedor > 0 && (
+                  <p className="modal__hint">
+                    Materiais em uso: {usuaria.saldo_devedor.toLocaleString("pt-BR")}
+                  </p>
+                )}
+
+                <label className="modal__label" htmlFor="repay-valor">
+                  Quanto você quer pagar?
+                </label>
+                <input
+                  id="repay-valor"
+                  type="number"
+                  className="modal__input"
+                  value={repayModal.valor}
+                  onChange={(e) => setRepayModal((prev) => ({ ...prev, valor: e.target.value }))}
+                  min={1}
+                  max={repayModal.emprestimo.valor_sats}
+                  placeholder="Valor"
+                  autoFocus
+                />
+
+                <div className="modal__quick-buttons">
+                  <button
+                    className="financial__btn financial__btn--small"
+                    onClick={() => {
+                      const half = Math.floor(repayModal.emprestimo!.valor_sats / 2);
+                      setRepayModal((prev) => ({ ...prev, valor: String(half) }));
+                    }}
+                  >
+                    Metade
+                  </button>
+                  <button
+                    className="financial__btn financial__btn--small"
+                    onClick={() => setRepayModal((prev) => ({
+                      ...prev,
+                      valor: String(prev.emprestimo!.valor_sats),
+                    }))}
+                  >
+                    Tudo
+                  </button>
+                </div>
+
+                <div className="modal__actions">
+                  <button
+                    className="financial__btn financial__btn--secondary"
+                    onClick={closeRepayModal}
+                    disabled={repayModal.processing}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    className="financial__btn financial__btn--primary financial__btn--small"
+                    onClick={handleRepay}
+                    disabled={repayModal.processing || !repayModal.valor || parseInt(repayModal.valor, 10) <= 0}
+                  >
+                    {repayModal.processing ? "Processando..." : "Pagar"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Invoice display modal ───────────────────────────── */}
+      {invoiceDisplay && invoiceDisplay.invoice_bolt11 && (
+        <div className="modal-overlay" onClick={closeInvoiceDisplay}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal__title">Kit Solicitado! 🧶</h3>
+            <p className="modal__text">
+              Seu kit de material foi solicitado com sucesso.
+              Valor: {invoiceDisplay.valor_sats.toLocaleString("pt-BR")}
+            </p>
+            <div className="invoice-box">
+              <p className="invoice-box__label">Invoice Lightning:</p>
+              <code className="invoice-box__code">{invoiceDisplay.invoice_bolt11}</code>
+            </div>
+            <p className="modal__hint">
+              Para concluir o padrão, use o botão "Concluir Padrão" no histórico.
+            </p>
+            <div className="modal__actions">
+              <button
+                className="financial__btn financial__btn--primary financial__btn--small"
+                onClick={closeInvoiceDisplay}
+              >
+                Entendi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
