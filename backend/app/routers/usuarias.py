@@ -12,6 +12,7 @@ from app.auth import (
 from app.database import get_db
 from app.models.usuaria import Usuaria
 from app.schemas.usuaria import UsuariaCreate, UsuariaResponse
+from app.services.lnbits import lnbits
 
 router = APIRouter(prefix="/usuarias", tags=["usuarias"])
 
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/usuarias", tags=["usuarias"])
     response_model=UsuariaResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Criar nova usuária",
-    description="Cria uma conta pseudônima — só pede um PIN, nenhum dado de identidade real.",
+    description="Cria uma conta pseudônima — só pede um PIN, nenhum dado de identidade real. Cria wallet dedicada no LNbits.",
 )
 def create_usuaria(
     payload: UsuariaCreate,
@@ -50,9 +51,13 @@ def create_usuaria(
     while db.query(Usuaria).filter(Usuaria.codigo_indicacao == codigo).first():
         codigo = generate_codigo_indicacao()
 
+    # Create dedicated LNbits wallet for this user
+    wallet = lnbits.create_wallet(f"usuaria_{identificador}")
+
     usuaria = Usuaria(
         identificador=identificador,
         pin_hash=hash_pin(payload.pin),
+        lnbits_wallet_key=wallet["adminkey"],
         codigo_indicacao=codigo,
         codigo_indicacao_usado=payload.codigo_indicacao,
     )

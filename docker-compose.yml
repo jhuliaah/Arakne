@@ -54,10 +54,16 @@ services:
   # ── Backend (FastAPI) ───────────────────────────────────────
   backend:
     build: ./backend
+    environment:
+      - LNBITS_URL=http://lnbits:5000
+      - LNBITS_ADMIN_KEY=${LNBITS_ADMIN_KEY:-}
+      - LNBITS_POOL_KEY=${LNBITS_POOL_KEY:-}
     volumes:
       - ./backend:/app
     ports:
       - "8000:8000"
+    depends_on:
+      - lnbits
     networks:
       - arakne-net
 

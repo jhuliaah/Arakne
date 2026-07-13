@@ -18,6 +18,16 @@ from app.models import (  # noqa: F401
 )
 
 
+@pytest.fixture(autouse=True)
+def mock_lnbits():
+    """Ensure LNbits is in mock mode for all tests (no real Lightning node)."""
+    from app.services.lnbits import lnbits
+
+    lnbits._mock = True
+    yield
+    lnbits._mock = True
+
+
 @pytest.fixture
 def db_session():
     """Create a fresh in-memory database for each test."""

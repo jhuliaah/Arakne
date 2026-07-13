@@ -16,6 +16,7 @@ class Usuaria(Base):
     id = Column(Integer, primary_key=True, index=True)
     identificador = Column(String, unique=True, index=True, nullable=False)
     pin_hash = Column(String, nullable=False)
+    lnbits_wallet_key = Column(String, nullable=True)  # admin key for LNbits wallet
     codigo_indicacao = Column(String, unique=True, index=True, nullable=False)
     codigo_indicacao_usado = Column(String, nullable=True)
     tier = Column(Integer, default=0, nullable=False)
