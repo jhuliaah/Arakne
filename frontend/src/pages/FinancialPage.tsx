@@ -59,11 +59,24 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
     }
     const me = await getMe(token);
     if (!me) {
-      setError("Não foi possível carregar seus dados. Tente novamente.");
-      setLoading(false);
-      return;
+      // Token might be stale — clear and retry once
+      localStorage.removeItem("arakne_token");
+      const retryToken = await ensureToken();
+      if (!retryToken) {
+        setError("Não foi possível carregar seus dados. Tente novamente.");
+        setLoading(false);
+        return;
+      }
+      const retryMe = await getMe(retryToken);
+      if (!retryMe) {
+        setError("Não foi possível carregar seus dados. Tente novamente.");
+        setLoading(false);
+        return;
+      }
+      setUsuaria(retryMe);
+    } else {
+      setUsuaria(me);
     }
-    setUsuaria(me);
 
     // Load emprestimos from stored IDs
     const ids = getEmprestimoIds();
@@ -139,7 +152,7 @@ export default function FinancialPage({ onBack }: FinancialPageProps) {
         {error && (
           <div className="financial__error">
             <p>{error}</p>
-            <button onClick={() => setError(null)}>Ok</button>
+            <button onClick={() => { setError(null); loadData(); }}>Tentar de novo</button>
           </div>
         )}
 

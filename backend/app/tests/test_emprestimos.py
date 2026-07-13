@@ -17,10 +17,13 @@ def _criar_usuaria(client, pin="1234"):
     return resp.json()
 
 
-def _dar_aval(client, avalista_ident, nova_ident):
-    """Dá aval de uma usuária para outra via API."""
+def _dar_aval(client, avalista_codigo, nova_ident):
+    """Dá aval de uma usuária para outra via API.
+
+    Uses avalista's codigo_indicacao (shareable) and nova's identificador.
+    """
     resp = client.post("/avais", json={
-        "avalista_identificador": avalista_ident,
+        "avalista_codigo_indicacao": avalista_codigo,
         "nova_usuaria_identificador": nova_ident,
     })
     assert resp.status_code == 201
@@ -40,7 +43,7 @@ def test_fluxo_completo_criar_aval_emprestar_pagar_subir_tier(client, db_session
     nova = _criar_usuaria(client, "5678")
 
     # 3. Dar aval: nova usuária recebe aval → tier 0→1
-    _dar_aval(client, avalista["identificador"], nova["identificador"])
+    _dar_aval(client, avalista["codigo_indicacao"], nova["identificador"])
 
     usuaria = db_session.query(Usuaria).filter(
         Usuaria.identificador == nova["identificador"]
@@ -87,7 +90,7 @@ def test_pagamento_parcial_nao_quita_nem_sobe_tier(client, db_session):
     """Regra: pagar parcialmente reduz saldo mas não sobe tier."""
     avalista = _criar_usuaria(client, "1234")
     nova = _criar_usuaria(client, "5678")
-    _dar_aval(client, avalista["identificador"], nova["identificador"])
+    _dar_aval(client, avalista["codigo_indicacao"], nova["identificador"])
 
     # Empréstimo de 5.000 sats
     resp = client.post(f"/emprestimos/{nova['identificador']}")
@@ -117,7 +120,7 @@ def test_usuaria_com_saldo_devedor_nao_pode_emprestar_de_novo(client, db_session
     """Regra: saldo devedor > 0 impede novo empréstimo."""
     avalista = _criar_usuaria(client, "1234")
     nova = _criar_usuaria(client, "5678")
-    _dar_aval(client, avalista["identificador"], nova["identificador"])
+    _dar_aval(client, avalista["codigo_indicacao"], nova["identificador"])
 
     # Primeiro empréstimo
     resp = client.post(f"/emprestimos/{nova['identificador']}")
@@ -132,7 +135,7 @@ def test_emprestimo_quitado_rejeita_novo_pagamento(client, db_session):
     """Regra: não aceitar pagamento de empréstimo já quitado."""
     avalista = _criar_usuaria(client, "1234")
     nova = _criar_usuaria(client, "5678")
-    _dar_aval(client, avalista["identificador"], nova["identificador"])
+    _dar_aval(client, avalista["codigo_indicacao"], nova["identificador"])
 
     resp = client.post(f"/emprestimos/{nova['identificador']}")
     emprestimo = resp.json()
@@ -155,7 +158,7 @@ def test_tier_sobe_duas_vezes_apos_dois_emprestimos(client, db_session):
     """Regra: quitar tier 1 → tier 2, pegar e quitar tier 2 → tier 3."""
     avalista = _criar_usuaria(client, "1234")
     nova = _criar_usuaria(client, "5678")
-    _dar_aval(client, avalista["identificador"], nova["identificador"])
+    _dar_aval(client, avalista["codigo_indicacao"], nova["identificador"])
 
     # Empréstimo 1 (tier 1, 5.000 sats)
     resp = client.post(f"/emprestimos/{nova['identificador']}")

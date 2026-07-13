@@ -6,9 +6,13 @@ from pydantic import BaseModel
 
 
 class AvalCreate(BaseModel):
-    """Request body for POST /avais — one user vouches for another."""
+    """Request body for POST /avais — one user vouches for another.
 
-    avalista_identificador: str
+    The avalista is identified by their shareable codigo_indicacao (not
+    their private identificador), since invite links use codigo_indicacao.
+    """
+
+    avalista_codigo_indicacao: str
     nova_usuaria_identificador: str
 
 

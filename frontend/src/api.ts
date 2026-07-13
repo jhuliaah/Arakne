@@ -12,6 +12,7 @@ const STORAGE_KEYS = {
   token: "arakne_token",
   emprestimos: "arakne_emprestimo_ids",
   avalCodigos: "arakne_aval_codigos",
+  onboardingDone: "arakne_onboarding_done",
 } as const;
 
 export function getIdentificador(): string | null {
@@ -90,14 +91,14 @@ export async function createUsuaria(pin: string, codigoIndicacao?: string): Prom
   }
 }
 
-export async function createAval(avalistaIdent: string, novaIdent: string): Promise<boolean> {
+export async function createAval(avalistaCodigoIndicacao: string, novaIdentificador: string): Promise<boolean> {
   try {
     const resp = await fetch(`${API_BASE}/avais`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        avalista_identificador: avalistaIdent,
-        nova_usuaria_identificador: novaIdent,
+        avalista_codigo_indicacao: avalistaCodigoIndicacao,
+        nova_usuaria_identificador: novaIdentificador,
       }),
     });
     return resp.ok;
@@ -173,7 +174,13 @@ export async function getEmprestimo(id: number): Promise<Emprestimo | null> {
 /** Ensure a token exists — login if needed. Returns token or null. */
 export async function ensureToken(): Promise<string | null> {
   const existing = getToken();
-  if (existing) return existing;
+  if (existing) {
+    // Verify the token still works
+    const me = await getMe(existing);
+    if (me) return existing;
+    // Token expired — clear and re-login
+    localStorage.removeItem(STORAGE_KEYS.token);
+  }
 
   const ident = getIdentificador();
   const pin = getPin();
@@ -184,4 +191,74 @@ export async function ensureToken(): Promise<string | null> {
 
   setToken(loginResp.token);
   return loginResp.token;
+}
+
+/**
+ * Ensure the user is onboarded: creates a "shadow avalista" + the real user
+ * + an aval (tier 0→1) if not already done. All silent — no UI interaction.
+ *
+ * For the invite flow (/convite/{codigo}), the codigo is the avalista's
+ * codigo_indicacao — the shadow avalista is NOT created (the inviter is the
+ * avalista). This function is only for the self-onboarding flow (visiting /
+ * without an invite).
+ */
+export async function ensureOnboarding(inviteCodigo?: string | null): Promise<boolean> {
+  // Already onboarded?
+  if (localStorage.getItem(STORAGE_KEYS.onboardingDone) === "1") {
+    return true;
+  }
+
+  try {
+    // If we have an invite code, the inviter is the avalista.
+    // Otherwise, create a shadow avalista to simulate the aval.
+    let avalistaCodigo: string | null = inviteCodigo ?? null;
+
+    // Ensure the real user exists
+    let ident = getIdentificador();
+    let pin = getPin();
+
+    if (!ident || !pin) {
+      pin = generatePin();
+      const usuaria = await createUsuaria(pin);
+      if (!usuaria) return false;
+      ident = usuaria.identificador;
+      setIdentificador(ident);
+      setPin(pin);
+
+      // If no invite, create a shadow avalista
+      if (!avalistaCodigo && !isAvalCreated("self")) {
+        const shadowPin = generatePin();
+        const shadow = await createUsuaria(shadowPin);
+        if (!shadow) return false;
+        avalistaCodigo = shadow.codigo_indicacao;
+      }
+
+      // Create the aval (avalista → real user → tier 0→1)
+      if (avalistaCodigo) {
+        const ok = await createAval(avalistaCodigo, ident);
+        if (ok) {
+          markAvalCreated(inviteCodigo ?? "self");
+        }
+      }
+    } else {
+      // User exists — ensure aval exists
+      if (!inviteCodigo && !isAvalCreated("self")) {
+        // Need a shadow avalista
+        const shadowPin = generatePin();
+        const shadow = await createUsuaria(shadowPin);
+        if (shadow) {
+          const ok = await createAval(shadow.codigo_indicacao, ident);
+          if (ok) markAvalCreated("self");
+        }
+      } else if (inviteCodigo && !isAvalCreated(inviteCodigo)) {
+        const ok = await createAval(inviteCodigo, ident);
+        if (ok) markAvalCreated(inviteCodigo);
+      }
+    }
+
+    localStorage.setItem(STORAGE_KEYS.onboardingDone, "1");
+    return true;
+  } catch {
+    return false;
+  }
 }

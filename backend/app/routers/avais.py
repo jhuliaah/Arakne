@@ -26,7 +26,7 @@ router = APIRouter(prefix="/avais", tags=["avais"])
 def create_aval(payload: AvalCreate, db: Session = Depends(get_db)):
     avalista = (
         db.query(Usuaria)
-        .filter(Usuaria.identificador == payload.avalista_identificador)
+        .filter(Usuaria.codigo_indicacao == payload.avalista_codigo_indicacao)
         .first()
     )
     if not avalista:
