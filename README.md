@@ -404,6 +404,52 @@ arakne/
 
 ---
 
+## Demo do júri
+
+### Preparação
+
+```bash
+cd backend
+python seed_demo.py          # reseta o banco e cria Usuária A (tier 1)
+uvicorn app.main:app --port 8000   # sobe o backend
+```
+
+### Roteiro automatizado (verifica todo o fluxo)
+
+```bash
+python run_demo.py
+```
+
+O script executa:
+1. Seed (reseta banco + cria Usuária A em tier 1)
+2. Usuária B nasce pelo convite de A → tier 1 automático
+3. B pede empréstimo (5.000 sats)
+4. B paga parcialmente (2.000) → saldo abaixa para 3.000
+5. B paga o restante (3.000) → tier sobe para 2
+6. Verificação final
+
+**Tempo esperado:** < 10s (mock mode, sem rede Lightning real).
+
+### Roteiro manual (pela interface)
+
+1. Rodar `python seed_demo.py` + `uvicorn` + `docker compose up frontend`
+2. Abrir `http://localhost:5173/convite/DEMO_A_INVITE`
+   - Usuária B é criada + aval automático → tier 1
+3. Digitar "Ponto Arakne" na busca → tela "Meus Materiais"
+4. Clicar "Solicitar Kit de Material" → empréstimo de 5.000
+5. Clicar "Concluir Padrão" → pagar 2.000 (parcial) → saldo 3.000
+6. Clicar "Concluir Padrão" → pagar 3.000 (restante) → tier sobe para 2
+
+### Dados de seed
+
+| Usuária | Identificador | PIN | Tier | Notas |
+|---------|----------------|-----|------|-------|
+| A | `demo_usuaria_a` | `1234` | 1 | Pronta para demo, saldo 0 |
+| Shadow | `shadow_avalista_seed` | `0000` | 3 | Descartável, só para o aval de A |
+| B | (criada na demo) | `5678` | 1 | Nasce pelo link `/convite/DEMO_A_INVITE` |
+
+---
+
 ## Desenvolvimento local (sem Docker)
 
 ### Backend
