@@ -10,6 +10,7 @@ from app.database import Base, get_db
 from app.main import app
 from app.models import (  # noqa: F401
     Usuaria,
+    Sessao,
     Padrao,
     ProgressoPadrao,
     Emprestimo,

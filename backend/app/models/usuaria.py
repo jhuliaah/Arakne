@@ -1,4 +1,8 @@
-"""Usuaria model — the core user entity of Arakne."""
+"""Usuaria model — the core user entity of Arakne.
+
+No real identity fields (name, CPF, email) are stored. Each user is identified
+by a random `identificador` string and authenticates with a hashed PIN.
+"""
 
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
@@ -10,6 +14,9 @@ class Usuaria(Base):
     __tablename__ = "usuarias"
 
     id = Column(Integer, primary_key=True, index=True)
+    identificador = Column(String, unique=True, index=True, nullable=False)
+    pin_hash = Column(String, nullable=False)
+    codigo_indicacao = Column(String, unique=True, index=True, nullable=False)
     codigo_indicacao_usado = Column(String, nullable=True)
     tier = Column(Integer, default=0, nullable=False)
     saldo_devedor = Column(Integer, default=0, nullable=False)  # in sats
@@ -24,6 +31,7 @@ class Usuaria(Base):
         backref="avalizados",
         foreign_keys=[avalista_id],
     )
+    sessoes = relationship("Sessao", back_populates="usuaria", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Usuaria id={self.id} tier={self.tier} congelado={self.tier_congelado}>"

@@ -77,6 +77,90 @@ bash scripts/init-lightning.sh
 | Frontend carregando            | Abrir `http://localhost:5173`           |
 | LNbits acessível               | Abrir `http://localhost:5000`           |
 | LNbits: criar wallet de teste  | UI do LNbits → "Add new wallet"         |
+| Auth: criar usuária            | `curl -X POST http://localhost:8000/usuarias ...` (ver abaixo) |
+
+---
+
+## Migração de banco de dados
+
+**Estratégia:** `Base.metadata.create_all()` (SQLAlchemy) — executada
+automaticamente no startup do FastAPI (`app/main.py`).
+
+Não usamos Alembic nesta fase. O `create_all()` é idempotente: cria tabelas
+que ainda não existem, sem tocar nas existentes. Para o hackathon (demo local,
+SQLite), isso é suficiente. Se for necessário versionar schemas no futuro,
+basta adicionar Alembic e um `alembic.ini` em `backend/`.
+
+---
+
+## Autenticação pseudônima
+
+O cadastro **não pede nome, CPF, e-mail, nem nenhum dado de identidade real**.
+A usuária fornece apenas um PIN local. O sistema gera:
+
+- **`identificador`** — string aleatória opaca (ex: `K7x9_aBcD1e`) que substitui login/e-mail
+- **`codigo_indicacao`** — código de indicação próprio da usuária (para tier 3)
+- **`pin_hash`** — PIN hasheado com bcrypt (nunca armazenado em texto puro)
+
+Tokens de sessão são strings opacas aleatórias, armazenadas na tabela `sessoes`
+com expiração de 30 dias.
+
+### Endpoints
+
+#### POST /usuarias — criar usuária
+
+```bash
+curl -X POST http://localhost:8000/usuarias \
+  -H "Content-Type: application/json" \
+  -d '{"pin": "1234"}'
+
+# Com código de indicação (opcional):
+curl -X POST http://localhost:8000/usuarias \
+  -H "Content-Type: application/json" \
+  -d '{"pin": "1234", "codigo_indicacao": "Rt3_mN9p"}'
+```
+
+Resposta (201):
+```json
+{
+  "identificador": "K7x9_aBcD1e",
+  "codigo_indicacao": "Rt3_mN9p",
+  "codigo_indicacao_usado": null,
+  "tier": 0,
+  "saldo_devedor": 0,
+  "tier_congelado": false,
+  "padroes_completos": 0,
+  "criado_em": "2025-07-13T20:15:00"
+}
+```
+
+> Guarde o `identificador` — ele é a única forma de logar.
+
+#### POST /login — obter token de sessão
+
+```bash
+curl -X POST http://localhost:8000/login \
+  -H "Content-Type: application/json" \
+  -d '{"identificador": "K7x9_aBcD1e", "pin": "1234"}'
+```
+
+Resposta (200):
+```json
+{
+  "token": "s3kr3t_t0k3n...",
+  "token_type": "bearer",
+  "identificador": "K7x9_aBcD1e"
+}
+```
+
+#### GET /usuarias/me — dados da própria usuária
+
+```bash
+curl http://localhost:8000/usuarias/me \
+  -H "Authorization: Bearer s3kr3t_t0k3n..."
+```
+
+Resposta (200): mesmo formato do cadastro, sem `pin_hash`, `avalista_id`, ou `id` interno.
 
 ---
 
@@ -98,19 +182,27 @@ arakne/
 │   ├── pytest.ini
 │   └── app/
 │       ├── __init__.py
-│       ├── main.py            # FastAPI app
+│       ├── main.py            # FastAPI app + create_all()
 │       ├── database.py        # SQLAlchemy engine + session
+│       ├── auth.py            # hash PIN, sessão, get_current_usuaria
 │       ├── models/
 │       │   ├── __init__.py
 │       │   ├── base.py
 │       │   ├── usuaria.py
+│       │   ├── sessao.py
 │       │   ├── padrao.py
 │       │   ├── progresso.py
 │       │   ├── emprestimo.py
 │       │   └── aval.py
+│       ├── schemas/
+│       │   ├── __init__.py
+│       │   ├── usuaria.py
+│       │   └── auth.py
 │       ├── routers/
 │       │   ├── __init__.py
-│       │   └── health.py      # GET /health
+│       │   ├── health.py      # GET /health
+│       │   ├── auth.py        # POST /login
+│       │   └── usuarias.py    # POST /usuarias, GET /usuarias/me
 │       ├── services/
 │       │   └── __init__.py
 │       └── tests/
@@ -135,11 +227,16 @@ arakne/
 
 | Tabela           | Campos principais                                                      |
 |------------------|------------------------------------------------------------------------|
-| **Usuaria**      | id, codigo_indicacao_usado, tier (0-3), saldo_devedor, tier_congelado, avalista_id (FK), padroes_completos, criado_em |
+| **Usuaria**      | id, identificador, pin_hash, codigo_indicacao, codigo_indicacao_usado, tier (0-3), saldo_devedor, tier_congelado, avalista_id (FK), padroes_completos, criado_em |
+| **Sessao**       | id, usuaria_id (FK), token, criada_em, expira_em                       |
 | **Padrao**       | id, nivel, nome_publico, sats_desbloqueados                            |
 | **ProgressoPadrao** | usuaria_id, padrao_id, completo_em                                  |
 | **Emprestimo**   | id, usuaria_id, valor_sats, invoice_id, status, criado_em, quitado_em  |
 | **Aval**         | usuaria_que_avaliza_id, nova_usuaria_id, criado_em                     |
+
+> **Nenhum campo de identidade real** (nome, CPF, e-mail) existe no banco.
+> A coluna `avalista_id` existe para o motor de risco calcular elegibilidade,
+> mas **nunca aparece na interface** — nem para a própria usuária.
 
 ---
 
@@ -184,6 +281,8 @@ npm run dev
 - Notificações usam linguagem têxtil ("novo padrão disponível").
 - O gesto de busca por um padrão-código revela a tela financeira.
 - O grafo de avalistas **nunca** aparece na interface.
+- PIN hasheado com bcrypt — nunca armazenado em texto puro.
+- Tokens de sessão são opacos e expiram em 30 dias.
 
 ---
 
