@@ -1,10 +1,42 @@
+/** Main app — simple path-based router.
+
+  Routes:
+    /                    → Catalog (default)
+    /convite/{codigo}    → Invite (shows catalog, creates aval silently)
+  The financial screen is revealed by the search gesture (typing "Ponto Arakne"),
+  not by URL navigation.
+*/
+
+import { useState, useEffect } from "react";
+import CatalogPage from "./pages/CatalogPage";
+import FinancialPage from "./pages/FinancialPage";
+import InvitePage from "./pages/InvitePage";
+
+type View = "catalog" | "financial";
+
+function getInviteCodigo(): string | null {
+  const match = window.location.pathname.match(/^\/convite\/(.+)$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 export default function App() {
-  return (
-    <div className="app">
-      <main className="app__main">
-        <h1 className="app__title">Arakne</h1>
-        <p className="app__subtitle">aprenda crochê e tecelagem</p>
-      </main>
-    </div>
-  );
+  const [view, setView] = useState<View>("catalog");
+  const [inviteCodigo] = useState<string | null>(getInviteCodigo());
+
+  // Handle browser back button
+  useEffect(() => {
+    const handler = () => setView("catalog");
+    window.addEventListener("popstate", handler);
+    return () => window.removeEventListener("popstate", handler);
+  }, []);
+
+  if (view === "financial") {
+    return <FinancialPage onBack={() => setView("catalog")} />;
+  }
+
+  if (inviteCodigo) {
+    return <InvitePage codigo={inviteCodigo} onRevealFinancial={() => setView("financial")} />;
+  }
+
+  return <CatalogPage onRevealFinancial={() => setView("financial")} />;
 }

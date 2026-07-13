@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const API_URL = process.env.API_URL || "http://localhost:8000";
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -9,7 +11,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: API_URL,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
