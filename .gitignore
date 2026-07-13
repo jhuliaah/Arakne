@@ -33,3 +33,20 @@ yarn.lock
 .env
 .env.*
 !.env.example
+
+# Python / Backend
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+backend/arakne.db
+
+# Frontend (Arakne)
+frontend/node_modules/
+frontend/dist/
+
+# Docker volumes
+bitcoin-data/
+lnd-data/
+lnbits-data/
