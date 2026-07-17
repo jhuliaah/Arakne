@@ -50,3 +50,4 @@ frontend/dist/
 bitcoin-data/
 lnd-data/
 lnbits-data/
+.venv/

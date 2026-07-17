@@ -23,7 +23,9 @@
 */
 
 import { useState, useEffect } from "react";
-import CatalogPage from "./pages/CatalogPage";
+import TrilhasPage from "./pages/TrilhasPage";
+import TrilhaDetailPage from "./pages/TrilhaDetailPage";
+import AulaPage from "./pages/AulaPage";
 import DecoyPage from "./pages/DecoyPage";
 import FinancialPage from "./pages/FinancialPage";
 import ExtratoPage from "./pages/ExtratoPage";
@@ -40,6 +42,7 @@ import BackupPage from "./pages/onboarding/BackupPage";
 import PinLoginPage from "./pages/onboarding/PinLoginPage";
 import RecoveryPage from "./pages/onboarding/RecoveryPage";
 import type { NavTarget } from "./components/BottomNav";
+import type { Aula } from "./types";
 import { getIdentificador, isUnlockedThisSession } from "./api";
 
 type View =
@@ -51,6 +54,8 @@ type View =
   | "pinLogin"
   | "recovery"
   | "catalog"
+  | "trilhaDetail"
+  | "aula"
   | "comunidade"
   | "projetos"
   | "perfil"
@@ -84,6 +89,9 @@ export default function App() {
   // Set when ScannerQRPage successfully reads a code — consumed once by
   // FinancialPage to pre-fill the troca form, then cleared.
   const [scannedIdentificador, setScannedIdentificador] = useState<string | null>(null);
+  // Trilha/aula navigation state for the learning trails.
+  const [selectedTrilhaId, setSelectedTrilhaId] = useState<number | null>(null);
+  const [selectedAula, setSelectedAula] = useState<Aula | null>(null);
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine
   );
@@ -115,7 +123,7 @@ export default function App() {
   useEffect(() => {
     const handler = () => {
       setView((current) =>
-        ["financial", "extrato", "meuQRCode", "scannerQR", "decoy", "comunidade", "projetos", "perfil"].includes(current)
+        ["financial", "extrato", "meuQRCode", "scannerQR", "decoy", "comunidade", "projetos", "perfil", "trilhaDetail", "aula"].includes(current)
           ? "catalog"
           : current
       );
@@ -261,11 +269,40 @@ export default function App() {
     );
   }
 
+  if (view === "trilhaDetail" && selectedTrilhaId !== null) {
+    return (
+      <TrilhaDetailPage
+        trilhaId={selectedTrilhaId}
+        onBack={() => setView("catalog")}
+        onOpenAula={(aula) => {
+          setSelectedAula(aula);
+          setView("aula");
+        }}
+        onNavigate={(t) => setView(NAV_TO_VIEW[t])}
+      />
+    );
+  }
+
+  if (view === "aula" && selectedAula) {
+    return (
+      <AulaPage
+        aula={selectedAula}
+        onBack={() => setView("trilhaDetail")}
+        onConcluida={() => setView("trilhaDetail")}
+        onNavigate={(t) => setView(NAV_TO_VIEW[t])}
+      />
+    );
+  }
+
   return (
-    <CatalogPage
+    <TrilhasPage
       onRevealFinancial={() => setView("financial")}
       onRevealDecoy={() => setView("decoy")}
       onNavigate={(t) => setView(NAV_TO_VIEW[t])}
+      onOpenTrilha={(id) => {
+        setSelectedTrilhaId(id);
+        setView("trilhaDetail");
+      }}
       inviteCodigo={inviteCodigo}
     />
   );

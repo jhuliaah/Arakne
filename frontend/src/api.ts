@@ -1,6 +1,6 @@
 /** API client — all fetch calls to the Arakne backend go through here. */
 
-import type { Emprestimo, LoginResponse, PagamentoResponse, PontoDeTroca, Troca, Usuaria } from "./types";
+import type { ConcluirAulaResponse, Emprestimo, LoginResponse, PagamentoResponse, PontoDeTroca, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
 
 const API_BASE = "/api";
 
@@ -364,4 +364,46 @@ export async function criarConta(
 
   localStorage.setItem(STORAGE_KEYS.onboardingDone, "1");
   return usuaria;
+}
+
+// ── Trilhas de conhecimento (camada de disfarce) ──────────
+// Educacional apenas — sem acoplamento financeiro.
+
+export async function listarTrilhas(tecnica?: string, estilo?: string): Promise<Trilha[] | null> {
+  try {
+    const params = new URLSearchParams();
+    if (tecnica) params.set("tecnica", tecnica);
+    if (estilo) params.set("estilo", estilo);
+    const qs = params.toString();
+    const resp = await fetch(`${API_BASE}/trilhas${qs ? "?" + qs : ""}`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function getTrilha(id: number): Promise<TrilhaDetail | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/trilhas/${id}`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function concluirAula(aulaId: number): Promise<ConcluirAulaResponse | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/trilhas/aulas/${aulaId}/concluir`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
 }

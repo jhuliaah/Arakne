@@ -61,3 +61,58 @@ export interface Pattern {
   emoji: string;
   descricao: string;
 }
+
+// ── Trilhas de conhecimento (camada de disfarce) ───────────
+// Educacional apenas — sem acoplamento financeiro.
+
+export interface Material {
+  id: number;
+  aula_id: number;
+  tipo: "pdf" | "imagem" | "video";
+  url: string;
+  titulo: string;
+  ordem: number;
+  legenda: string | null;
+}
+
+export interface Aula {
+  id: number;
+  trilha_id: number;
+  nivel: number;
+  ordem: number;
+  titulo: string;
+  descricao: string;
+  concluida: boolean;
+  materiais: Material[];
+}
+
+export interface Nivel {
+  nivel: number;
+  label: string;
+  desbloqueado: boolean;
+  aulas: Aula[];
+}
+
+export interface Trilha {
+  id: number;
+  titulo: string;
+  tecnica: string;
+  estilo: string;
+  descricao: string;
+  emoji: string;
+  cor: string;
+  ordem: number;
+  total_aulas: number;
+  aulas_concluidas: number;
+}
+
+export interface TrilhaDetail extends Trilha {
+  niveis: Nivel[];
+}
+
+export interface ConcluirAulaResponse {
+  aula_id: number;
+  concluida: boolean;
+  nivel_completo: boolean;
+  trilha_completa: boolean;
+}
