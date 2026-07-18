@@ -1,15 +1,27 @@
-/** Aula page — shows PDF, step-by-step images, and video for a lesson.
+/** Aula page — mostra PDF, passo a passo e vídeo da aula.
 
-  Supports three media types per aula: PDF (download/view link), imagem
-  (numbered step-by-step sequence), and video (embedded iframe). The
-  "Concluir Aula" button marks progress — purely educational, no
-  financial effect.
+  Suporta três tipos de mídia por aula: PDF (link), imagem (passo a passo
+  numerado) e vídeo (iframe embutido). O botão "Concluir Aula" marca o
+  progresso — puramente educacional, sem efeito financeiro.
+
+  EXCEÇÃO: a "aula 1 do nível 1" da trilha #9 (Ponto Arakne) é o portal
+  disfarçado para a camada financeira. Em vez de conteúdo, mostra o
+  HexPatternCanvas:
+   - se já há identidade Nostr armazenada → mode="login" → destravar com
+     o desenho → revela FinancialPage (transição arakne-reveal);
+   - se não → mode="register" → cria identidade Nostr → vai ao backup
+     (mostra o mnemonic) e depois ao catálogo.
+
+  As demais aulas da trilha #9 mostram conteúdo normal (placeholder do
+  seed), como qualquer outra trilha.
 */
 
 import { useState } from "react";
 import Header from "../components/Header";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
-import { concluirAula } from "../api";
+import HexPatternCanvas from "../components/HexPatternCanvas";
+import { concluirAula, generatePin, criarConta, markUnlockedThisSession } from "../api";
+import { hasStoredIdentity, createAndStoreIdentity, unlockWithPattern } from "../lib/pattern-storage";
 import type { Aula } from "../types";
 
 interface AulaPageProps {
@@ -17,13 +29,111 @@ interface AulaPageProps {
   onBack: () => void;
   onConcluida: () => void;
   onNavigate: (target: NavTarget) => void;
+  /** Trilha #9 aula 1 nível 1 destravada → revela a camada financeira. */
+  onRevealFinancial: () => void;
+  /** Trilha #9 aula 1 nível 1 sem conta → cria identidade e vai ao backup. */
+  onGoToBackup: (mnemonic: string) => void;
 }
 
-export default function AulaPage({ aula, onBack, onConcluida, onNavigate }: AulaPageProps) {
+/** Detecta a "aula portal": aula 1 do nível 1 da trilha #9 (Ponto Arakne). */
+function isPortalAula(aula: Aula): boolean {
+  return aula.trilha_id === 9 && aula.nivel === 1 && aula.ordem === 1;
+}
+
+export default function AulaPage({
+  aula,
+  onBack,
+  onConcluida,
+  onNavigate,
+  onRevealFinancial,
+  onGoToBackup,
+}: AulaPageProps) {
   const [concluida, setConcluida] = useState(aula.concluida);
   const [submitting, setSubmitting] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
+  // Estado do portal (trilha #9 aula 1 nível 1).
+  const [patternError, setPatternError] = useState(false);
+  const [patternLoading, setPatternLoading] = useState(false);
+  const [patternResetKey, setPatternResetKey] = useState(0);
+
+  // ── Portal: trilha #9, aula 1, nível 1 ──────────────────────
+  if (isPortalAula(aula)) {
+    const hasIdentity = hasStoredIdentity();
+    const mode = hasIdentity ? "login" : "register";
+
+    async function handlePortalPattern(pattern: number[]) {
+      setPatternLoading(true);
+      if (hasIdentity) {
+        // Login: destrava o nsec com o desenho.
+        const identity = await unlockWithPattern(pattern);
+        setPatternLoading(false);
+        if (identity) {
+          markUnlockedThisSession();
+          onRevealFinancial();
+        } else {
+          setPatternError(true);
+          window.setTimeout(() => {
+            setPatternError(false);
+            setPatternResetKey((k) => k + 1);
+          }, 650);
+        }
+      } else {
+        // Registro: cria identidade Nostr + conta backend, vai ao backup.
+        try {
+          const id = await createAndStoreIdentity(pattern);
+          // Conta backend com PIN aleatório interno (usuária não vê).
+          await criarConta(generatePin());
+          setPatternLoading(false);
+          onGoToBackup(id.mnemonic);
+        } catch {
+          setPatternLoading(false);
+          setErro("Algo deu errado ao guardar seu desenho. Tente novamente.");
+          setPatternResetKey((k) => k + 1);
+        }
+      }
+    }
+
+    return (
+      <div className="page">
+        <Header />
+        <main className="catalog">
+          <button className="financial__back" onClick={onBack} aria-label="Voltar">
+            ← Voltar
+          </button>
+
+          <div className="aula__header">
+            <h2 className="aula__title">{aula.titulo}</h2>
+            <p className="aula__desc">
+              {hasIdentity
+                ? "Desenhe seu Ponto Arakne para abrir esta aula."
+                : "Desenhe seu Ponto Arakne para começar — ele é a chave do seu ateliê."}
+            </p>
+          </div>
+
+          <div style={{ width: "100%", maxWidth: "480px", margin: "0 auto" }}>
+            <HexPatternCanvas
+              mode={mode}
+              onPatternSubmit={hasIdentity ? handlePortalPattern : undefined}
+              onPatternConfirmed={hasIdentity ? undefined : handlePortalPattern}
+              error={patternError}
+              resetKey={patternResetKey}
+              minLength={8}
+            />
+            {patternLoading && (
+              <p className="field__hint" style={{ textAlign: "center", marginTop: "0.75rem" }}>
+                {hasIdentity ? "Verificando..." : "Guardando seu desenho..."}
+              </p>
+            )}
+            {erro && <p className="field__error">{erro}</p>}
+          </div>
+        </main>
+        <BottomNav active="catalog" onNavigate={onNavigate} />
+      </div>
+    );
+  }
+
+  // ── Aula normal (conteúdo educacional) ──────────────────────
   const pdfs = aula.materiais.filter((m) => m.tipo === "pdf");
   const imagens = aula.materiais
     .filter((m) => m.tipo === "imagem")

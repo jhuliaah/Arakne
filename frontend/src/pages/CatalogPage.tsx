@@ -8,13 +8,12 @@ import BottomNav, { type NavTarget } from "../components/BottomNav";
 import { patterns } from "../data/patterns";
 
 interface CatalogPageProps {
-  onRevealFinancial: () => void;
   onRevealDecoy?: () => void;
   onNavigate: (target: NavTarget) => void;
   inviteCodigo?: string | null;
 }
 
-export default function CatalogPage({ onRevealFinancial, onRevealDecoy, onNavigate, inviteCodigo }: CatalogPageProps) {
+export default function CatalogPage({ onRevealDecoy, onNavigate, inviteCodigo }: CatalogPageProps) {
   const [query, setQuery] = useState("");
   const [filterApplied, setFilterApplied] = useState(false);
 
@@ -32,7 +31,6 @@ export default function CatalogPage({ onRevealFinancial, onRevealDecoy, onNaviga
         <div className="catalog__search">
           <SearchBar
             onSearch={(q) => { setQuery(q); setFilterApplied(true); }}
-            onRevealFinancial={onRevealFinancial}
             onRevealDecoy={onRevealDecoy}
           />
         </div>

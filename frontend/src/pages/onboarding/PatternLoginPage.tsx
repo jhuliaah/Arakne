@@ -1,0 +1,137 @@
+/** PatternLoginPage — login via desenho do Ponto Arakne.
+ *
+ *  Substitui o antigo PinLoginPage (PIN numérico). A usuária desenha seu
+ *  padrão hexagonal; o nsec criptografado no localStorage é decriptado com
+ *  a chave derivada do padrão (PBKDF2 + AES-GCM). Se bater, a sessão é
+ *  destravada.
+ *
+ *  Após 8 tentativas erradas, mostra "Precisa de ajuda? Peça à sua
+ *  convidadora" (recuperação social via NIP-17 cortada este ciclo — sem
+ *  fluxo automatizado).
+ */
+
+import { useState } from "react";
+import Header from "../../components/Header";
+import HexPatternCanvas from "../../components/HexPatternCanvas";
+import { markUnlockedThisSession } from "../../api";
+import { hasStoredIdentity, unlockWithPattern } from "../../lib/pattern-storage";
+
+interface PatternLoginPageProps {
+  onUnlocked: () => void;
+  onCreateAccount: () => void;
+}
+
+const MAX_ATTEMPTS = 8;
+
+export default function PatternLoginPage({ onUnlocked, onCreateAccount }: PatternLoginPageProps) {
+  const [error, setError] = useState(false);
+  const [attempts, setAttempts] = useState(0);
+  const [resetKey, setResetKey] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  // Sem identidade armazenada neste aparelho — não há o que destravar.
+  // (Bootstrap do App.tsx normalmente impede chegar aqui, mas o guard
+  // protege contra navegação manual via "Já tenho conta" no splash.)
+  if (!hasStoredIdentity()) {
+    return (
+      <div className="page">
+        <Header />
+        <main className="onboarding onboarding--centered">
+          <div className="onboarding__glyph">🧶</div>
+          <h1 className="onboarding__title">Nenhuma conta neste aparelho</h1>
+          <p className="onboarding__tagline">
+            Para entrar, crie sua conta e desenhe seu Ponto Arakne.
+          </p>
+          <div className="onboarding__form">
+            <button className="btn btn--primary" onClick={onCreateAccount}>
+              Criar conta
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  async function handlePatternSubmit(pattern: number[]) {
+    setLoading(true);
+    const identity = await unlockWithPattern(pattern);
+    setLoading(false);
+
+    if (identity) {
+      markUnlockedThisSession();
+      onUnlocked();
+      return;
+    }
+
+    // Padrão errado: dispara animação de erro no canvas e conta a tentativa.
+    const next = attempts + 1;
+    setAttempts(next);
+    setError(true);
+    // Limpa o flag de erro após a animação (~600ms) para o canvas aceitar
+    // um novo desenho. resetKey força o canvas a resetar o estado interno.
+    window.setTimeout(() => {
+      setError(false);
+      setResetKey((k) => k + 1);
+    }, 650);
+  }
+
+  function handleTryAgain() {
+    setAttempts(0);
+    setError(false);
+    setResetKey((k) => k + 1);
+  }
+
+  // Atingiu o limite de tentativas — mensagem de ajuda (sem fluxo automatizado).
+  if (attempts >= MAX_ATTEMPTS) {
+    return (
+      <div className="page">
+        <Header />
+        <main className="onboarding onboarding--centered">
+          <div className="onboarding__glyph">🧶</div>
+          <h1 className="onboarding__title">Precisa de ajuda?</h1>
+          <p className="onboarding__tagline">
+            Peça à sua convidadora — ela pode te ajudar a recuperar o acesso ao
+            seu ateliê.
+          </p>
+          <div className="onboarding__form">
+            <button className="btn btn--primary" onClick={handleTryAgain}>
+              Tentar de novo
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page">
+      <Header />
+      <main className="onboarding onboarding--centered">
+        <div className="onboarding__glyph">🧶</div>
+        <h1 className="onboarding__title">Continue essa trilha</h1>
+        <p className="onboarding__tagline">Desenhe seu Ponto Arakne para entrar</p>
+
+        <div style={{ width: "100%", maxWidth: "420px" }}>
+          <HexPatternCanvas
+            mode="login"
+            onPatternSubmit={handlePatternSubmit}
+            error={error}
+            resetKey={resetKey}
+          />
+
+          {loading && (
+            <p className="field__hint" style={{ textAlign: "center", marginTop: "0.75rem" }}>
+              Verificando...
+            </p>
+          )}
+
+          {attempts > 0 && (
+            <p className="field__hint" style={{ textAlign: "center", marginTop: "0.5rem" }}>
+              Tentativa {attempts} de {MAX_ATTEMPTS}
+            </p>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}

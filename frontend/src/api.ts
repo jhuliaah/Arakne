@@ -333,14 +333,15 @@ export async function recuperarConta(
 }
 
 /**
- * Cria a conta real (identificador + PIN escolhido pela usuária) e garante
- * que ela nasça com um aval válido (tier 0 → 1):
+ * Cria a conta real (identificador + PIN aleatório interno, nunca mostrado
+ * à usuária) e garante que ela nasça com um aval válido (tier 0 → 1):
  *  - se veio de um link de convite, quem convidou é a avalista;
  *  - caso contrário, criamos uma "avalista sombra" só para liberar o
  *    primeiro nível — invisível para a usuária, não aparece em lugar nenhum.
  *
- * Diferente do antigo fluxo silencioso, isto agora é chamado explicitamente
- * pela tela "Criar conta", depois que a usuária escolheu seu próprio PIN.
+ * Já faz login e guarda token + PIN internamente, para que o ensureToken
+ * das telas financeiras funcione sem depender de um passo de "backup"
+ * que faça login (o novo onboarding não tem esse passo).
  */
 export async function criarConta(
   pin: string,
@@ -350,6 +351,11 @@ export async function criarConta(
   if (!usuaria) return null;
 
   setIdentificador(usuaria.identificador);
+  setPin(pin);
+
+  // Login imediato para obter token (mantém ensureToken funcionando).
+  const loginResp = await login(usuaria.identificador, pin);
+  if (loginResp) setToken(loginResp.token);
 
   if (inviteCodigo) {
     markAvalCreated(inviteCodigo);

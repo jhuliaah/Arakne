@@ -53,9 +53,9 @@ export const patterns: Pattern[] = [
   },
 ];
 
-/** Secret search term that reveals the financial screen. */
-export const SECRET_SEARCH = "Ponto Arakne";
-
 /** Second secret term — reveals a decoy catalog with zero financial traces.
- *  Someone snooping for "hidden" screens finds this instead of the real one. */
+ *  Someone snooping for "hidden" screens finds this instead of the real one.
+ *
+ *  O gesto "Ponto Arakne" foi removido: a camada financeira agora é
+ *  revelada pela aula 1 do nível 1 da trilha #9 (desenho do Ponto Arakne). */
 export const DECOY_SEARCH = "Galeria de Padrões";

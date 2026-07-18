@@ -1,52 +1,62 @@
+/** CreateAccountPage — onboarding: nome + consentimento + desenho do Ponto Arakne.
+ *
+ *  Substitui o antigo PIN numérico pela identidade Nostr: a usuária desenha
+ *  um padrão hexagonal (Ponto Arakne) que vira a senha de destravamento.
+ *  O nsec é criptografado com AES-GCM-256 + PBKDF2 do padrão e guardado
+ *  no localStorage. O mnemonic BIP-39 (12 palavras) é o backup único —
+ *  mostrado na próxima tela (BackupPage).
+ *
+ *  A conta do backend ainda é criada com um PIN aleatório interno (nunca
+ *  mostrado à usuária) para manter a integração financeira existente.
+ *  Este ciclo, npub não vai ao backend (YAGNI).
+ */
+
 import { useState } from "react";
 import Header from "../../components/Header";
-import { criarConta, setNickname } from "../../api";
+import HexPatternCanvas from "../../components/HexPatternCanvas";
+import { criarConta, generatePin, setNickname } from "../../api";
+import { createAndStoreIdentity } from "../../lib/pattern-storage";
+import type { NostrIdentity } from "../../lib/nostr-keys";
 
 interface CreateAccountPageProps {
   inviteCodigo?: string | null;
   onBack: () => void;
-  onCreated: (identificador: string, pin: string) => void;
+  /** Chamado quando o padrão foi confirmado e a identidade Nostr criada.
+   *  Recebe o mnemonic BIP-39 (12 palavras) para a BackupPage mostrar. */
+  onCreated: (mnemonic: string) => void;
 }
 
 export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: CreateAccountPageProps) {
   const [nome, setNome] = useState("");
-  const [pin, setPinValue] = useState("");
-  const [confirmPin, setConfirmPin] = useState("");
   const [consent, setConsent] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pinDigitsOk = /^\d{4}$/.test(pin);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  async function handlePatternConfirmed(pattern: number[]) {
     setError(null);
-
-    if (!pinDigitsOk) {
-      setError("O PIN precisa ter exatamente 4 números.");
-      return;
-    }
-    if (pin !== confirmPin) {
-      setError("Os PINs não coincidem.");
-      return;
-    }
-    if (!consent) {
-      setError("Você precisa concordar com as regras da comunidade para continuar.");
-      return;
-    }
-
     setLoading(true);
-    const usuaria = await criarConta(pin, inviteCodigo);
-    setLoading(false);
+    try {
+      // 1. Cria identidade Nostr: gera mnemonic, deriva nsec/npub, criptografa
+      //    nsec com o padrão e guarda no localStorage.
+      const identity: NostrIdentity = await createAndStoreIdentity(pattern);
 
-    if (!usuaria) {
-      setError("Não foi possível criar sua conta agora. Tente novamente.");
-      return;
+      // 2. Cria conta no backend com PIN aleatório interno (a usuária não vê).
+      //    Mantém a integração financeira existente (ensureToken/login).
+      const pin = generatePin();
+      const usuaria = await criarConta(pin, inviteCodigo);
+      if (!usuaria) {
+        setError("Não foi possível criar sua conta agora. Tente novamente.");
+        setLoading(false);
+        return;
+      }
+
+      if (nome.trim()) setNickname(nome.trim());
+      onCreated(identity.mnemonic);
+    } catch {
+      setError("Algo deu errado ao guardar seu desenho. Tente novamente.");
+      setLoading(false);
     }
-
-    if (nome.trim()) setNickname(nome.trim());
-    onCreated(usuaria.identificador, pin);
-  };
+  }
 
   return (
     <div className="page">
@@ -56,47 +66,15 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
         <h1 className="onboarding__title">Criar conta</h1>
         <p className="onboarding__tagline">Leva menos de um minuto.</p>
 
-        <form className="onboarding__form" onSubmit={handleSubmit}>
+        <div className="onboarding__form">
           <div className="field">
-            <label className="field__label" htmlFor="nome">Nome ou apelido</label>
+            <label className="field__label" htmlFor="nome">Nome ou apelido (opcional)</label>
             <input
               id="nome"
               className="field__input"
               placeholder="Como quer ser chamada?"
               value={nome}
               onChange={(e) => setNome(e.target.value)}
-              autoComplete="off"
-            />
-          </div>
-
-          <div className="field">
-            <label className="field__label" htmlFor="pin">Crie um PIN de 4 dígitos</label>
-            <input
-              id="pin"
-              className="field__input field__input--pin"
-              type="password"
-              inputMode="numeric"
-              pattern="\d{4}"
-              maxLength={4}
-              placeholder="••••"
-              value={pin}
-              onChange={(e) => setPinValue(e.target.value.replace(/\D/g, "").slice(0, 4))}
-              autoComplete="off"
-            />
-          </div>
-
-          <div className="field">
-            <label className="field__label" htmlFor="confirmPin">Confirme o PIN</label>
-            <input
-              id="confirmPin"
-              className="field__input field__input--pin"
-              type="password"
-              inputMode="numeric"
-              pattern="\d{4}"
-              maxLength={4}
-              placeholder="••••"
-              value={confirmPin}
-              onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
               autoComplete="off"
             />
           </div>
@@ -115,10 +93,25 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
 
           {error && <p className="field__error">{error}</p>}
 
-          <button className="btn btn--primary" type="submit" disabled={loading}>
-            {loading ? "Criando..." : "Continuar"}
-          </button>
-        </form>
+          <div className="onboarding__pattern-intro">
+            <p className="onboarding__tagline" style={{ marginBottom: "0.5rem" }}>
+              Desenhe seu <strong>Ponto Arakne</strong> — ele é a chave do seu
+              ateliê. Conecte pelo menos 8 pontos e repita para confirmar.
+            </p>
+          </div>
+
+          <HexPatternCanvas
+            mode="register"
+            onPatternConfirmed={handlePatternConfirmed}
+            minLength={8}
+          />
+
+          {loading && (
+            <p className="field__hint" style={{ textAlign: "center", marginTop: "0.75rem" }}>
+              Guardando seu desenho...
+            </p>
+          )}
+        </div>
       </main>
     </div>
   );

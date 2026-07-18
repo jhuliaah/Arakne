@@ -6,8 +6,9 @@
   that could hint at a financial layer.
 
   The search bar on this page only filters patterns — it does NOT respond
-  to SECRET_SEARCH or DECOY_SEARCH, so there's no way to accidentally
-  stumble into the real financial screen from here.
+  to DECOY_SEARCH, so there's no way to accidentally stumble into the real
+  financial screen from here. (The old SECRET_SEARCH gesture was removed;
+  the financial layer is now revealed by the trilha #9 aula 1 nível 1.)
 */
 
 import { useState } from "react";

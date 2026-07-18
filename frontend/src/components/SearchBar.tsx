@@ -1,29 +1,25 @@
-/** Search bar — filters patterns and detects secret search gestures.
+/** Search bar — filtra padrões e técnicas da trilha.
 
-  Two secret terms exist:
-  - SECRET_SEARCH → reveals the real financial screen
-  - DECOY_SEARCH  → reveals a decoy catalog with zero financial traces
+  Busca normal apenas. O antigo gesto secreto "Ponto Arakne" foi removido
+  (a camada financeira agora é revelada pela aula 1 do nível 1 da trilha
+  #9). O gesto "Galeria de Padrões" (decoy) permanece.
 */
 
+
 import { useState } from "react";
-import { DECOY_SEARCH, SECRET_SEARCH } from "../data/patterns";
+import { DECOY_SEARCH } from "../data/patterns";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
-  onRevealFinancial: () => void;
   onRevealDecoy?: () => void;
 }
 
-export default function SearchBar({ onSearch, onRevealFinancial, onRevealDecoy }: SearchBarProps) {
+export default function SearchBar({ onSearch, onRevealDecoy }: SearchBarProps) {
   const [query, setQuery] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const q = query.trim().toLowerCase();
-    if (q === SECRET_SEARCH.toLowerCase()) {
-      onRevealFinancial();
-      return;
-    }
     if (onRevealDecoy && q === DECOY_SEARCH.toLowerCase()) {
       onRevealDecoy();
       return;
@@ -36,7 +32,7 @@ export default function SearchBar({ onSearch, onRevealFinancial, onRevealDecoy }
       <input
         type="text"
         className="search__input"
-        placeholder="Buscar padrão..."
+        placeholder="Buscar um padrão ou técnica..."
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         aria-label="Buscar padrão de crochê"

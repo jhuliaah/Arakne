@@ -1,10 +1,5 @@
-/** Trilhas page — the new home of the disguise layer.
+/** Trilhas page — home da camada de aprendizado do ateliê. */
 
-  Replaces the old shallow pattern catalog with real learning trails
-  (crochê, bordado, costura, tricô, patchwork) organized by two axes:
-  técnica and estilo. The SearchBar still detects SECRET_SEARCH and
-  DECOY_SEARCH — those gestures are preserved exactly.
-*/
 
 import { useEffect, useState } from "react";
 import Header from "../components/Header";
@@ -17,7 +12,6 @@ const TECNICAS = ["Todas", "Costura", "Crochê", "Bordado", "Tricô", "Patchwork
 const ESTILOS = ["Todos", "Tradicional", "Regional", "Industrial", "Para Venda", "Especial"];
 
 interface TrilhasPageProps {
-  onRevealFinancial: () => void;
   onRevealDecoy?: () => void;
   onNavigate: (target: NavTarget) => void;
   onOpenTrilha: (id: number) => void;
@@ -25,7 +19,6 @@ interface TrilhasPageProps {
 }
 
 export default function TrilhasPage({
-  onRevealFinancial,
   onRevealDecoy,
   onNavigate,
   onOpenTrilha,
@@ -62,7 +55,6 @@ export default function TrilhasPage({
         <div className="catalog__search">
           <SearchBar
             onSearch={(q) => { setQuery(q); setFilterApplied(true); }}
-            onRevealFinancial={onRevealFinancial}
             onRevealDecoy={onRevealDecoy}
           />
         </div>
@@ -73,9 +65,9 @@ export default function TrilhasPage({
           </div>
         )}
 
-        <h2 className="catalog__title">Trilhas de Conhecimento</h2>
+        <h2 className="catalog__title">Suas trilhas</h2>
         <p className="catalog__subtitle">
-          Aprenda no seu ritmo — crochê, bordado, costura, tricô e patchwork.
+          Escolha o que quer aprender hoje
         </p>
 
         <div className="filter-chips" role="tablist" aria-label="Filtrar por técnica">

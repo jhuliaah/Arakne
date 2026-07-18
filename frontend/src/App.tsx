@@ -1,26 +1,23 @@
-/** Main app — simple path-based router + onboarding state machine.
+/** Main app — roteador simples por path + máquina de estados do onboarding.
 
   Routes:
-    /                    → normal flow (splash on a brand-new device, PIN
-                           unlock on a returning one)
-    /convite/{codigo}    → same flow, but a brand-new device sees a real
-                           accept/decline decision screen first, instead of
-                           silently being vouched for
+    /                    → fluxo normal (splash num aparelho novo, desenho do
+                           Ponto Arakne num aparelho que já tem conta)
+    /convite/{codigo}    → mesmo fluxo, mas um aparelho novo vê uma tela de
+                           aceitar/recusar o convite antes de criar a conta
 
-  Onboarding states (brand-new device, no identificador saved locally):
+  Onboarding (aparelho novo, sem identidade Nostr armazenada):
     splash → createAccount → backup → catalog
-    (invite link:) inviteDecision → createAccount → backup → catalog
+    (com convite:) inviteDecision → createAccount → backup → catalog
 
-  Returning device (identificador already saved locally):
-    pinLogin (once per browser tab session) → catalog
-    pinLogin → "esqueci meu PIN" → recovery → catalog
+  Aparelho que já tem conta (identidade Nostr no localStorage):
+    patternLogin (uma vez por aba) → catalog
 
-  Three more views are revealed by search gestures from inside the catalog
-  (not URL navigation):
-  - "Ponto Arakne"       → Financial screen (real, disguised)
-  - "Galeria de Padrões" → Decoy catalog (looks real, zero financial traces)
-  - Any other query      → Normal pattern filter
+  A camada financeira é revelada pela "aula 1 do nível 1" da trilha #9
+  (Ponto Arakne): desenhar o padrão correto destrava a FinancialPage.
+  Não há mais gesto de busca secreto na SearchBar.
 */
+
 
 import { useState, useEffect } from "react";
 import TrilhasPage from "./pages/TrilhasPage";
@@ -39,11 +36,11 @@ import InviteDecisionPage from "./pages/InviteDecisionPage";
 import SplashPage from "./pages/onboarding/SplashPage";
 import CreateAccountPage from "./pages/onboarding/CreateAccountPage";
 import BackupPage from "./pages/onboarding/BackupPage";
-import PinLoginPage from "./pages/onboarding/PinLoginPage";
-import RecoveryPage from "./pages/onboarding/RecoveryPage";
+import PatternLoginPage from "./pages/onboarding/PatternLoginPage";
 import type { NavTarget } from "./components/BottomNav";
 import type { Aula } from "./types";
-import { getIdentificador, isUnlockedThisSession } from "./api";
+import { isUnlockedThisSession } from "./api";
+import { hasStoredIdentity } from "./lib/pattern-storage";
 
 type View =
   | "loading"
@@ -51,8 +48,7 @@ type View =
   | "inviteDecision"
   | "createAccount"
   | "backup"
-  | "pinLogin"
-  | "recovery"
+  | "patternLogin"
   | "catalog"
   | "trilhaDetail"
   | "aula"
@@ -84,8 +80,8 @@ export default function App() {
   // screen — if false, CreateAccountPage gets no invite code at all.
   const [usarConvite, setUsarConvite] = useState(false);
   // Transient — only held in memory between "Criar conta" and "Backup".
-  // The PIN is deliberately never written to localStorage.
-  const [pendingCreds, setPendingCreds] = useState<{ identificador: string; pin: string } | null>(null);
+  // O mnemonic BIP-39 (12 palavras) é o backup único; nunca é persistido.
+  const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
   // Set when ScannerQRPage successfully reads a code — consumed once by
   // FinancialPage to pre-fill the troca form, then cleared.
   const [scannedIdentificador, setScannedIdentificador] = useState<string | null>(null);
@@ -108,10 +104,11 @@ export default function App() {
   }, []);
 
   // ── Bootstrap: decide which screen to land on ──────────────
+  // A identidade Nostr (nsec criptografado no localStorage) é a fonte de
+  // verdade. Se existe, pede o desenho; senão, vai ao onboarding.
   useEffect(() => {
-    const ident = getIdentificador();
-    if (ident) {
-      setView(isUnlockedThisSession() ? "catalog" : "pinLogin");
+    if (hasStoredIdentity()) {
+      setView(isUnlockedThisSession() ? "catalog" : "patternLogin");
     } else {
       setView(inviteCodigo ? "inviteDecision" : "splash");
     }
@@ -144,7 +141,7 @@ export default function App() {
     return (
       <SplashPage
         onCreateAccount={() => setView("createAccount")}
-        onHaveAccount={() => setView("recovery")}
+        onHaveAccount={() => setView("patternLogin")}
       />
     );
   }
@@ -169,48 +166,31 @@ export default function App() {
       <CreateAccountPage
         inviteCodigo={usarConvite ? inviteCodigo : null}
         onBack={() => setView(inviteCodigo ? "inviteDecision" : "splash")}
-        onCreated={(identificador, pin) => {
-          setPendingCreds({ identificador, pin });
+        onCreated={(mnemonic) => {
+          setPendingMnemonic(mnemonic);
           setView("backup");
         }}
       />
     );
   }
 
-  if (view === "backup" && pendingCreds) {
+  if (view === "backup" && pendingMnemonic) {
     return (
       <BackupPage
-        identificador={pendingCreds.identificador}
-        pin={pendingCreds.pin}
+        mnemonic={pendingMnemonic}
         onDone={() => {
-          setPendingCreds(null);
+          setPendingMnemonic(null);
           setView("catalog");
         }}
       />
     );
   }
 
-  if (view === "pinLogin") {
-    const ident = getIdentificador();
-    if (!ident) {
-      // Shouldn't happen, but fall back gracefully instead of a dead end.
-      setView("splash");
-      return null;
-    }
+  if (view === "patternLogin") {
     return (
-      <PinLoginPage
-        identificador={ident}
+      <PatternLoginPage
         onUnlocked={() => setView("catalog")}
-        onForgotPin={() => setView("recovery")}
-      />
-    );
-  }
-
-  if (view === "recovery") {
-    return (
-      <RecoveryPage
-        onBack={() => setView(getIdentificador() ? "pinLogin" : "splash")}
-        onRecovered={() => setView("catalog")}
+        onCreateAccount={() => setView("createAccount")}
       />
     );
   }
@@ -290,13 +270,17 @@ export default function App() {
         onBack={() => setView("trilhaDetail")}
         onConcluida={() => setView("trilhaDetail")}
         onNavigate={(t) => setView(NAV_TO_VIEW[t])}
+        onRevealFinancial={() => setView("financial")}
+        onGoToBackup={(mnemonic) => {
+          setPendingMnemonic(mnemonic);
+          setView("backup");
+        }}
       />
     );
   }
 
   return (
     <TrilhasPage
-      onRevealFinancial={() => setView("financial")}
       onRevealDecoy={() => setView("decoy")}
       onNavigate={(t) => setView(NAV_TO_VIEW[t])}
       onOpenTrilha={(id) => {
