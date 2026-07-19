@@ -7,8 +7,13 @@
                            aceitar/recusar o convite antes de criar a conta
 
   Onboarding (aparelho novo, sem identidade Nostr armazenada):
-    splash → createAccount → backup → catalog
-    (com convite:) inviteDecision → createAccount → backup → catalog
+    splash → createAccount → recoverySetup → catalog
+    (com convite:) inviteDecision → createAccount → recoverySetup → catalog
+
+  A view `backup` (BackupPage) foi substituída no onboarding pela
+  `recoverySetup` (Track 3C, Fase 3), mas permanece no router porque
+  a AulaPage ainda a referencia via onGoToBackup — será removida na
+  Fase 5.
 
   Aparelho que já tem conta (identidade Nostr no localStorage):
     patternLogin (uma vez por aba) → catalog
@@ -36,6 +41,7 @@ import InviteDecisionPage from "./pages/InviteDecisionPage";
 import SplashPage from "./pages/onboarding/SplashPage";
 import CreateAccountPage from "./pages/onboarding/CreateAccountPage";
 import BackupPage from "./pages/onboarding/BackupPage";
+import RecoverySetupPage from "./pages/onboarding/RecoverySetupPage";
 import PatternLoginPage from "./pages/onboarding/PatternLoginPage";
 import type { NavTarget } from "./components/BottomNav";
 import type { Aula } from "./types";
@@ -48,6 +54,7 @@ type View =
   | "inviteDecision"
   | "createAccount"
   | "backup"
+  | "recoverySetup"
   | "patternLogin"
   | "catalog"
   | "trilhaDetail"
@@ -79,9 +86,14 @@ export default function App() {
   // Whether the person explicitly accepted the invite on the decision
   // screen — if false, CreateAccountPage gets no invite code at all.
   const [usarConvite, setUsarConvite] = useState(false);
-  // Transient — only held in memory between "Criar conta" and "Backup".
-  // O mnemonic BIP-39 (12 palavras) é o backup único; nunca é persistido.
-  const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
+  // Transient — only held in memory between "Criar conta" e a próxima
+  // tela do onboarding. O npub (chave pública bech32) é o identificador
+  // de backup; nunca é persistido. O nsec (chave privada bech32) só
+  // existe em memória entre CreateAccountPage e RecoverySetupPage — ele
+  // é necessário para assinar os seals NIP-59 das shares endereçadas
+  // aos avalistas. NUNCA vai ao backend, NUNCA é persistido em plaintext.
+  const [pendingNpub, setPendingNpub] = useState<string | null>(null);
+  const [pendingNsec, setPendingNsec] = useState<string | null>(null);
   // Set when ScannerQRPage successfully reads a code — consumed once by
   // FinancialPage to pre-fill the troca form, then cleared.
   const [scannedIdentificador, setScannedIdentificador] = useState<string | null>(null);
@@ -166,20 +178,36 @@ export default function App() {
       <CreateAccountPage
         inviteCodigo={usarConvite ? inviteCodigo : null}
         onBack={() => setView(inviteCodigo ? "inviteDecision" : "splash")}
-        onCreated={(mnemonic) => {
-          setPendingMnemonic(mnemonic);
-          setView("backup");
+        onCreated={(npub, nsec) => {
+          setPendingNpub(npub);
+          setPendingNsec(nsec);
+          setView("recoverySetup");
         }}
       />
     );
   }
 
-  if (view === "backup" && pendingMnemonic) {
+  if (view === "recoverySetup" && pendingNpub && pendingNsec) {
+    return (
+      <RecoverySetupPage
+        npub={pendingNpub}
+        nsec={pendingNsec}
+        onBack={() => setView("createAccount")}
+        onDone={() => {
+          setPendingNpub(null);
+          setPendingNsec(null);
+          setView("catalog");
+        }}
+      />
+    );
+  }
+
+  if (view === "backup" && pendingNpub) {
     return (
       <BackupPage
-        mnemonic={pendingMnemonic}
+        mnemonic={pendingNpub}
         onDone={() => {
-          setPendingMnemonic(null);
+          setPendingNpub(null);
           setView("catalog");
         }}
       />
@@ -271,8 +299,8 @@ export default function App() {
         onConcluida={() => setView("trilhaDetail")}
         onNavigate={(t) => setView(NAV_TO_VIEW[t])}
         onRevealFinancial={() => setView("financial")}
-        onGoToBackup={(mnemonic) => {
-          setPendingMnemonic(mnemonic);
+        onGoToBackup={(npub) => {
+          setPendingNpub(npub);
           setView("backup");
         }}
       />

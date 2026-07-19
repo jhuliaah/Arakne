@@ -3,8 +3,8 @@
  *  Substitui o antigo PIN numérico pela identidade Nostr: a usuária desenha
  *  um padrão hexagonal (Ponto Arakne) que vira a senha de destravamento.
  *  O nsec é criptografado com AES-GCM-256 + PBKDF2 do padrão e guardado
- *  no localStorage. O mnemonic BIP-39 (12 palavras) é o backup único —
- *  mostrado na próxima tela (BackupPage).
+ *  no localStorage. O npub (chave pública bech32) é o identificador de
+ *  backup — anotado em QR/papel — mostrado na próxima tela (BackupPage).
  *
  *  A conta do backend ainda é criada com um PIN aleatório interno (nunca
  *  mostrado à usuária) para manter a integração financeira existente.
@@ -22,8 +22,11 @@ interface CreateAccountPageProps {
   inviteCodigo?: string | null;
   onBack: () => void;
   /** Chamado quando o padrão foi confirmado e a identidade Nostr criada.
-   *  Recebe o mnemonic BIP-39 (12 palavras) para a BackupPage mostrar. */
-  onCreated: (mnemonic: string) => void;
+   *  Recebe npub (chave pública bech32 — mostrada na próxima tela) e
+   *  nsec (chave privada bech32 — passada adiante para distribuir os
+   *  shards SSSS aos avalistas). O nsec NÃO é persistido em plaintext;
+   *  ele só existe em memória entre esta tela e a RecoverySetupPage. */
+  onCreated: (npub: string, nsec: string) => void;
 }
 
 export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: CreateAccountPageProps) {
@@ -36,8 +39,8 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
     setError(null);
     setLoading(true);
     try {
-      // 1. Cria identidade Nostr: gera mnemonic, deriva nsec/npub, criptografa
-      //    nsec com o padrão e guarda no localStorage.
+      // 1. Cria identidade Nostr: gera nsec direto (32 bytes), deriva npub,
+      //    criptografa nsec com o padrão e guarda no localStorage.
       const identity: NostrIdentity = await createAndStoreIdentity(pattern);
 
       // 2. Cria conta no backend com PIN aleatório interno (a usuária não vê).
@@ -51,7 +54,7 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
       }
 
       if (nome.trim()) setNickname(nome.trim());
-      onCreated(identity.mnemonic);
+      onCreated(identity.npub, identity.nsec);
     } catch {
       setError("Algo deu errado ao guardar seu desenho. Tente novamente.");
       setLoading(false);

@@ -1,6 +1,7 @@
 /** API client — all fetch calls to the Arakne backend go through here. */
 
 import type { ConcluirAulaResponse, Emprestimo, LoginResponse, PagamentoResponse, PontoDeTroca, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
+import { getStoredNpub } from "./lib/pattern-storage";
 
 const API_BASE = "/api";
 
@@ -104,10 +105,11 @@ export function generatePin(): string {
 
 // ── API calls ───────────────────────────────────────────────
 
-export async function createUsuaria(pin: string, codigoIndicacao?: string): Promise<Usuaria | null> {
+export async function createUsuaria(pin: string, codigoIndicacao?: string, npub?: string): Promise<Usuaria | null> {
   try {
     const body: Record<string, string> = { pin };
     if (codigoIndicacao) body.codigo_indicacao = codigoIndicacao;
+    if (npub) body.npub = npub;
     const resp = await fetch(`${API_BASE}/usuarias`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -290,6 +292,39 @@ export async function getMinhasTrocas(token: string): Promise<Troca[] | null> {
   }
 }
 
+// ── Avalistas de recuperação (social backup via Nostr) ───────
+
+/** Avalista de recuperação retornado pelo backend: cada uma das 3
+ *  tecelãs de confiança que guardam um shard do nsec da dona. O campo
+ *  `is_shadow` marca as tecelãs-sombra (placeholder com npub gerado
+ *  automaticamente quando a dona não indicou ninguém). */
+export interface AvalistaRecuperacao {
+  id: number;
+  usuaria_id: number;
+  npub_avaliadora: string;
+  ordem: number;
+  is_shadow: boolean;
+  criado_em: string;
+}
+
+/** Busca os 3 avalistas de recuperação da usuária logada.
+ *  Retorna null em erro de rede ou se o endpoint não existir ainda
+ *  (Track 3B cuida do backend — o frontend já está pronto para
+ *  consumir). */
+export async function getAvalistasRecuperacao(
+  token: string
+): Promise<AvalistaRecuperacao[] | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/usuarias/me/avalistas-recuperacao`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
 // ── Composite helpers ───────────────────────────────────────
 
 /** Ensure a token exists — login if needed. Returns token or null. */
@@ -345,9 +380,13 @@ export async function recuperarConta(
  */
 export async function criarConta(
   pin: string,
-  inviteCodigo?: string | null
+  inviteCodigo?: string | null,
+  npub?: string
 ): Promise<Usuaria | null> {
-  const usuaria = await createUsuaria(pin, inviteCodigo ?? undefined);
+  // Se o caller não passou npub explicitamente, tenta ler do localStorage
+  // (a identidade Nostr já deve ter sido criada por createAndStoreIdentity).
+  const npubFinal = npub ?? getStoredNpub() ?? undefined;
+  const usuaria = await createUsuaria(pin, inviteCodigo ?? undefined, npubFinal);
   if (!usuaria) return null;
 
   setIdentificador(usuaria.identificador);

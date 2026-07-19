@@ -428,6 +428,13 @@ body {
   color: var(--color-text);
 }
 
+.financial__card-unit {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-muted, #64748b);
+  margin-left: 0.25rem;
+}
+
 .financial__tier-display {
   display: flex;
   align-items: baseline;
@@ -1819,4 +1826,223 @@ body {
   .trilhas__grid {
     grid-template-columns: repeat(3, 1fr);
   }
+}
+
+/* ── HexPatternCanvas: tela de desenho do ponto Arakne ──────
+   Disfarce: parece um designer de padrão de crochê/bordado.
+   Grid hexagonal sutil + rastro de fio dourado. */
+.hex-pattern {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  gap: 0.75rem;
+}
+
+.hex-pattern__message {
+  font-size: 0.95rem;
+  color: var(--color-muted);
+  text-align: center;
+  min-height: 1.4em;
+  transition: color 0.2s ease;
+}
+
+.hex-pattern__message--error {
+  color: var(--color-danger);
+}
+
+.hex-pattern__canvas {
+  width: 100%;
+  max-width: 480px;
+  aspect-ratio: 1 / 1;
+  touch-action: none;
+  cursor: crosshair;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow);
+  display: block;
+}
+
+@media (max-width: 360px) {
+  .hex-pattern__canvas {
+    max-width: 100%;
+  }
+}
+
+/* ── RecoverySetupPage: tecelãs de confiança ──────────────────
+   Disfarce: lista de "tecelãs" (avalistas de recuperação) com
+   vocabulário de crochê. Mesma linguagem visual do resto do
+   onboarding — surface branca, sombra suave, acento dourado discreto. */
+.tecelas-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-bottom: 1.25rem;
+}
+
+.tecelas-list__item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  padding: 0.875rem 1rem;
+  box-shadow: var(--shadow);
+  border-left: 3px solid var(--color-secondary);
+}
+
+.tecelas-list__item--shadow {
+  border-left-color: var(--color-bg);
+  background: linear-gradient(180deg, var(--color-surface) 0%, var(--color-bg) 100%);
+}
+
+.tecelas-list__item--skeleton {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+  height: 56px;
+}
+
+.tecelas-list__slot {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  color: var(--color-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tecelas-list__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.tecelas-list__npub {
+  font-family: monospace;
+  font-size: 0.9rem;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tecelas-list__meta {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+}
+
+.tecelas-list__badge {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-secondary);
+  background: rgba(166, 130, 95, 0.12);
+  padding: 0.25rem 0.625rem;
+  border-radius: 999px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.tecelas-list__empty {
+  background: var(--color-surface);
+  border: 1px dashed var(--color-secondary);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+  font-size: 0.88rem;
+  color: var(--color-muted);
+  text-align: center;
+  line-height: 1.45;
+}
+
+.tecelas-explain {
+  font-size: 0.86rem;
+  color: var(--color-muted);
+  line-height: 1.5;
+  background: var(--color-bg);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.875rem;
+  margin-bottom: 1.25rem;
+}
+
+.tecelas-note {
+  background: rgba(201, 162, 39, 0.1);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.875rem;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin-bottom: 1rem;
+  line-height: 1.45;
+}
+
+.tecelas-error {
+  background: rgba(196, 92, 92, 0.08);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  padding: 0.875rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.tecelas-error p {
+  color: var(--color-danger);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.tecelas-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 0;
+  margin-bottom: 1rem;
+}
+
+.tecelas-loading p {
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.tecelas-success {
+  text-align: center;
+  padding: 1rem 0;
+  animation: bounceIn 0.4s ease;
+}
+
+.tecelas-success__icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.tecelas-success__title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  margin-bottom: 0.5rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+.tecelas-success__text {
+  font-size: 0.95rem;
+  color: var(--color-text);
+  margin-bottom: 0.25rem;
+}
+
+.tecelas-success__detail {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  margin-bottom: 1.25rem;
 }
