@@ -1,4 +1,4 @@
-"""Testes de integração dos endpoints de recuperação Nostr (Track 1A, Fase 1).
+"""Testes de integração dos endpoints de recuperação Nostr (Track 1A, Fase 1 / Track 3B, Fase 3).
 
 Cobre:
 - POST /usuarias com npub → persiste npub
@@ -6,15 +6,17 @@ Cobre:
 - POST /usuarias sem npub → npub é null
 - POST /usuarias com npub duplicado → 400
 - Cadastro cria 3 slots de avalistas de recuperação automaticamente
-- GET /usuarias/me/avalistas-recuperacao (auth) retorna 3 slots
-- GET /usuarias/by-identificador/{id}/npub (sem auth) retorna npub
+- GET /usuarias/me/avalistas-recuperacao (auth) retorna 3 slots em bech32 npub1...
+- GET /usuarias/by-identificador/{id}/npub (sem auth) retorna npub em bech32
 - GET /usuarias/by-identificador/{id}/avalistas-recuperacao (sem auth) retorna lista
 - Convidadora com npub → slot 1 é a convidadora (is_shadow=False)
 - Convidadora sem npub → slot 1 é shadow
+- Conversão hex → bech32 npub1... (NIP-19) na serialização
 """
 
 from app.models.avalista_recuperacao import AvalistaRecuperacao
 from app.models.usuaria import Usuaria
+from app.services.bech32 import npub_encode
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -73,7 +75,7 @@ def test_cadastro_com_npub_duplicado_rejeita(client, db_session):
 # ── Testes de avalistas de recuperação no cadastro ───────────
 
 def test_cadastro_cria_3_slots_de_recuperacao(client, db_session):
-    """Cadastro sem convidadora → 3 slots, todos shadow."""
+    """Cadastro sem convidadora → 3 slots, todos shadow, npub em bech32."""
     u = _criar_usuaria(client)
 
     # Use the authed endpoint to verify
@@ -89,10 +91,10 @@ def test_cadastro_cria_3_slots_de_recuperacao(client, db_session):
     assert sorted(ordens) == [1, 2, 3]
     # Sem convidadora → todos shadow
     assert all(a["is_shadow"] is True for a in data["avalistas"])
-    # Todos têm npub (placeholder hex de 64 chars)
+    # Todos têm npub em bech32 npub1... (convertido do hex armazenado)
     for a in data["avalistas"]:
-        assert a["npub_avaliadora"]
-        assert len(a["npub_avaliadora"]) >= 32
+        assert a["npub_avaliadora"].startswith("npub1")
+        assert len(a["npub_avaliadora"]) == 63  # 5 + 52 data + 6 checksum
 
 
 def test_cadastro_com_convidadora_com_npub_slot1_eh_convidadora(client, db_session):
@@ -128,12 +130,16 @@ def test_cadastro_com_convidadora_com_npub_slot1_eh_convidadora(client, db_sessi
     assert len(avalistas) == 3
     slot1 = next(a for a in avalistas if a["ordem"] == 1)
     assert slot1["is_shadow"] is False
-    assert slot1["npub_avaliadora"] == "c" * 64
+    # npub retornado em bech32 — deve corresponder ao hex "c"*64 armazenado
+    assert slot1["npub_avaliadora"] == npub_encode("c" * 64)
+    assert slot1["npub_avaliadora"].startswith("npub1")
     # Slots 2 e 3 são shadows
     slot2 = next(a for a in avalistas if a["ordem"] == 2)
     slot3 = next(a for a in avalistas if a["ordem"] == 3)
     assert slot2["is_shadow"] is True
     assert slot3["is_shadow"] is True
+    assert slot2["npub_avaliadora"].startswith("npub1")
+    assert slot3["npub_avaliadora"].startswith("npub1")
 
 
 def test_cadastro_com_convidadora_sem_npub_slot1_eh_shadow(client, db_session):
@@ -166,15 +172,28 @@ def test_cadastro_com_convidadora_sem_npub_slot1_eh_shadow(client, db_session):
 # ── Testes de descoberta pública (sem auth) ──────────────────
 
 def test_get_npub_by_identificador_sem_auth(client, db_session):
-    """GET /usuarias/by-identificador/{id}/npub (sem auth) retorna npub."""
-    npub = "e" * 64
-    u = _criar_usuaria(client, npub=npub)
+    """GET /usuarias/by-identificador/{id}/npub (sem auth) retorna npub em bech32."""
+    npub_hex = "e" * 64
+    u = _criar_usuaria(client, npub=npub_hex)
 
     resp = client.get(f"/usuarias/by-identificador/{u['identificador']}/npub")
     assert resp.status_code == 200
     data = resp.json()
     assert data["identificador"] == u["identificador"]
-    assert data["npub"] == npub
+    # npub retornado em bech32 npub1... (convertido do hex armazenado)
+    assert data["npub"] == npub_encode(npub_hex)
+    assert data["npub"].startswith("npub1")
+
+
+def test_get_npub_by_identificador_npub_ja_bech32_passthrough(client, db_session):
+    """Se o npub foi cadastrado já em bech32, o endpoint retorna-o inalterado."""
+    npub_hex = "1" * 64
+    npub_bech32 = npub_encode(npub_hex)
+    u = _criar_usuaria(client, npub=npub_bech32)
+
+    resp = client.get(f"/usuarias/by-identificador/{u['identificador']}/npub")
+    assert resp.status_code == 200
+    assert resp.json()["npub"] == npub_bech32
 
 
 def test_get_npub_by_identificador_sem_npub_retorna_null(client, db_session):
@@ -216,3 +235,39 @@ def test_get_my_avalistas_recuperacao_sem_auth_401(client, db_session):
     """GET /usuarias/me/avalistas-recuperacao sem token → 401."""
     resp = client.get("/usuarias/me/avalistas-recuperacao")
     assert resp.status_code == 401
+
+
+# ── Testes do módulo bech32 (Track 3B) ────────────────────────
+
+def test_bech32_npub_encode_formato():
+    """npub_encode produz string npub1... de 63 chars para 32 bytes."""
+    npub = npub_encode("ab" * 32)
+    assert npub.startswith("npub1")
+    assert len(npub) == 63
+
+
+def test_bech32_npub_encode_passthrough():
+    """npub_encode retorna bech32 inalterado se já for npub1..."""
+    npub = npub_encode("cd" * 32)
+    assert npub_encode(npub) == npub
+
+
+def test_bech32_npub_encode_rejeita_tamanho_errado():
+    """npub_encode rejeita pubkey que não tem 32 bytes."""
+    import pytest
+    with pytest.raises(ValueError):
+        npub_encode("ab" * 31)  # 31 bytes
+    with pytest.raises(ValueError):
+        npub_encode("ab" * 33)  # 33 bytes
+
+
+def test_bech32_npub_encode_round_trip_com_referencia():
+    """Verifica contra a lib de referência `bech32` (se instalada)."""
+    try:
+        import bech32 as ref
+    except ImportError:
+        import pytest
+        pytest.skip("lib de referência bech32 não instalada")
+    hex_key = "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaefa2cd0d"
+    expected = ref.bech32_encode("npub", ref.convertbits(bytes.fromhex(hex_key), 8, 5))
+    assert npub_encode(hex_key) == expected

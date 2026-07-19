@@ -3,16 +3,28 @@
 These are used by the Nostr-based social recovery flow (Track 1A, Fase 1).
 The backend only persists and exposes the npub of each recovery avalista;
 the actual NIP-17/59 + SSSS logic lives in the frontend.
+
+The backend stores pubkeys as 64-char hex (placeholder shadows are generated
+with ``secrets.token_hex(32)``; the convidadora's npub is stored in whatever
+format the frontend sent). On output, ``npub_avaliadora`` is normalized to
+bech32 ``npub1...`` (NIP-19) so the frontend can pass it directly to
+``wrapToRecipient`` without any conversion. See ``app/services/bech32.py``.
 """
 
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from app.services.bech32 import to_npub
 
 
 class AvalistaRecuperacaoOut(BaseModel):
-    """One recovery avalista slot for a usuária."""
+    """One recovery avalista slot for a usuária.
+
+    ``npub_avaliadora`` is always returned as bech32 ``npub1...`` regardless
+    of whether the stored value is hex or already bech32.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -22,6 +34,12 @@ class AvalistaRecuperacaoOut(BaseModel):
     ordem: int
     is_shadow: bool
     criado_em: datetime
+
+    @field_validator("npub_avaliadora", mode="before")
+    @classmethod
+    def _normalize_npub(cls, v):
+        """Convert stored hex pubkey to bech32 npub1... on output."""
+        return to_npub(v)
 
 
 class AvalistasRecuperacaoListResponse(BaseModel):
@@ -34,8 +52,15 @@ class NpubPublicoResponse(BaseModel):
     """Public npub of a usuária, lookup by identificador.
 
     npub is intentionally public — any device can discover it to send NIP-17
-    recovery requests. No auth required.
+    recovery requests. No auth required. The npub is normalized to bech32
+    ``npub1...`` on output.
     """
 
     identificador: str
     npub: Optional[str]
+
+    @field_validator("npub", mode="before")
+    @classmethod
+    def _normalize_npub(cls, v):
+        """Convert stored hex pubkey to bech32 npub1... on output."""
+        return to_npub(v)
