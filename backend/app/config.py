@@ -7,6 +7,14 @@ after creating wallets in the LNbits UI (http://localhost:5000).
 
 import os
 
+from dotenv import load_dotenv
+
+# Fora do Docker, nada lê o .env sozinho — load_dotenv() acha o arquivo
+# andando pelos diretórios pai a partir de onde o processo foi iniciado, e
+# escreve cada CHAVE=valor na tabela de ambiente do processo atual.
+load_dotenv()
+
+
 LNBITS_URL = os.getenv("LNBITS_URL", "http://lnbits:5000")
 LNBITS_ADMIN_KEY = os.getenv("LNBITS_ADMIN_KEY", "")
 LNBITS_POOL_KEY = os.getenv("LNBITS_POOL_KEY", "")
