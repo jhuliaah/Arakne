@@ -19,6 +19,12 @@ class UsuariaCreate(BaseModel):
         None,
         description="Código de indicação de outra usuária (opcional)",
     )
+    npub: Optional[str] = Field(
+        None,
+        description="Chave pública Nostr (npub) da usuária — usada para "
+        "recuperação social via Nostr. O frontend gera o par nsec/npub; "
+        "o backend apenas recebe e guarda o npub.",
+    )
 
 
 class UsuariaResponse(BaseModel):
@@ -36,6 +42,7 @@ class UsuariaResponse(BaseModel):
     disponivel_como_ponto: bool
     trocas_como_ponto_concluidas: int
     criado_em: datetime
+    npub: Optional[str] = None
 
 
 class ConviteResponse(BaseModel):

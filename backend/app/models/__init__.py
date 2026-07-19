@@ -7,7 +7,12 @@ from app.models.padrao import Padrao  # noqa: F401
 from app.models.progresso import ProgressoPadrao  # noqa: F401
 from app.models.emprestimo import Emprestimo  # noqa: F401
 from app.models.aval import Aval  # noqa: F401
+from app.models.avalista_recuperacao import AvalistaRecuperacao  # noqa: F401
 from app.models.troca import Troca  # noqa: F401
+from app.models.trilha import Trilha  # noqa: F401
+from app.models.aula import Aula  # noqa: F401
+from app.models.material import Material  # noqa: F401
+from app.models.progresso_aula import ProgressoAula  # noqa: F401
 
 __all__ = [
     "Base",
@@ -17,5 +22,10 @@ __all__ = [
     "ProgressoPadrao",
     "Emprestimo",
     "Aval",
+    "AvalistaRecuperacao",
     "Troca",
+    "Trilha",
+    "Aula",
+    "Material",
+    "ProgressoAula",
 ]

@@ -23,6 +23,7 @@ class Usuaria(Base):
     saldo_devedor = Column(Integer, default=0, nullable=False)  # in sats
     tier_congelado = Column(Boolean, default=False, nullable=False)
     avalista_id = Column(Integer, ForeignKey("usuarias.id"), nullable=True)
+    npub = Column(String, unique=True, index=True, nullable=True)
     padroes_completos = Column(Integer, default=0, nullable=False)
     disponivel_como_ponto = Column(Boolean, default=False, nullable=False)
     trocas_como_ponto_concluidas = Column(Integer, default=0, nullable=False)
