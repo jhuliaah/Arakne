@@ -13,8 +13,19 @@ from app.models import (  # noqa: F401 — import so tables are registered
     Emprestimo,
     Aval,
     Troca,
+    PagamentoPix,
+    CustodiaMultisig,
 )
-from app.routers import avais, auth, emprestimos, health, pontos_troca, usuarias
+from app.routers import (
+    avais,
+    auth,
+    custodia,
+    emprestimos,
+    health,
+    pix,
+    pontos_troca,
+    usuarias,
+)
 
 
 def _ensure_schema_up_to_date() -> None:
@@ -64,6 +75,8 @@ app.include_router(usuarias.router)
 app.include_router(avais.router)
 app.include_router(emprestimos.router)
 app.include_router(pontos_troca.router)
+app.include_router(pix.router)
+app.include_router(custodia.router)
 
 
 @app.get("/")

@@ -29,6 +29,12 @@ yarn.lock
 # Vercel
 .vercel
 
+# Custódia — arquivos de chave gerados por scripts/gerar_multisig.py.
+# Mnemonics NUNCA devem ir pro git, nem mesmo o "_xpub.json" (não é secreto,
+# mas não tem por que virar histórico do repo).
+scripts/steward*.json
+scripts/custodia_multisig_*.json
+
 # Secrets
 .env
 .env.*

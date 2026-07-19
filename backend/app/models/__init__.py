@@ -8,6 +8,8 @@ from app.models.progresso import ProgressoPadrao  # noqa: F401
 from app.models.emprestimo import Emprestimo  # noqa: F401
 from app.models.aval import Aval  # noqa: F401
 from app.models.troca import Troca  # noqa: F401
+from app.models.pagamento_pix import PagamentoPix  # noqa: F401
+from app.models.custodia import CustodiaMultisig  # noqa: F401
 
 __all__ = [
     "Base",
@@ -18,4 +20,6 @@ __all__ = [
     "Emprestimo",
     "Aval",
     "Troca",
+    "PagamentoPix",
+    "CustodiaMultisig",
 ]

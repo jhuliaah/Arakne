@@ -58,6 +58,13 @@ services:
       - LNBITS_URL=http://lnbits:5000
       - LNBITS_ADMIN_KEY=${LNBITS_ADMIN_KEY:-}
       - LNBITS_POOL_KEY=${LNBITS_POOL_KEY:-}
+      - MP_ACCESS_TOKEN=${MP_ACCESS_TOKEN:-}
+      - MP_WEBHOOK_URL=${MP_WEBHOOK_URL:-}
+      - PIX_NOME_RECEBEDOR=${PIX_NOME_RECEBEDOR:-Ateliê Fio de Ouro Materiais Artesanais}
+      - MULTISIG_DESCRIPTOR=${MULTISIG_DESCRIPTOR:-}
+      - MULTISIG_ENDERECO=${MULTISIG_ENDERECO:-}
+      - MULTISIG_QUORUM=${MULTISIG_QUORUM:-2-de-3}
+      - MULTISIG_NETWORK=${MULTISIG_NETWORK:-regtest}
     volumes:
       - ./backend:/app
     ports:
