@@ -5,12 +5,12 @@ Disguise: in the UI and API docs this is framed entirely as a trusted-peer
 material exchange within the community — never mentions cash/money.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_usuaria
+from app.auth import _naive_utc, get_current_usuaria
 from app.database import get_db
 from app.models.troca import Troca
 from app.models.usuaria import Usuaria
@@ -20,7 +20,6 @@ from app.schemas.troca import (
     TrocaCreateRequest,
     TrocaResponse,
 )
-from app.services.lnbits import lnbits
 from app.services.risco import pode_ser_ponto_troca
 
 router = APIRouter(tags=["pontos-de-troca"])
@@ -77,9 +76,10 @@ def listar_pontos(
     response_model=TrocaResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Solicitar uma troca (trocar fio por material via um Ponto de Troca)",
-    description="Cria uma invoice na carteira do Ponto de Troca e paga a partir "
-    "da carteira da própria solicitante — pagamento Lightning real entre as "
-    "duas usuárias, sem depender de nenhum PSP externo.",
+    description="Cria a troca como 'pendente' e aguarda aprovação explícita do "
+    "Ponto de Troca (fornecedora) via /trocas/{id}/confirmar. O pagamento "
+    "Lightning real fica fora do escopo do demo — o fluxo de aprovação é o "
+    "que importa.",
 )
 def criar_troca(
     payload: TrocaCreateRequest,
@@ -105,23 +105,6 @@ def criar_troca(
         status="pendente",
     )
     db.add(troca)
-    db.flush()
-
-    try:
-        invoice = lnbits.create_invoice(
-            ponto.lnbits_wallet_key, payload.valor_sats, "vale de produção"
-        )
-        troca.invoice_id = invoice.get("payment_hash")
-
-        if current_usuaria.lnbits_wallet_key:
-            lnbits.pay_invoice(current_usuaria.lnbits_wallet_key, invoice["payment_request"])
-
-        troca.status = "confirmada"
-        troca.confirmada_em = datetime.utcnow()
-        ponto.trocas_como_ponto_concluidas += 1
-    except Exception:
-        troca.status = "falhou"
-
     db.commit()
     db.refresh(troca)
 
@@ -133,6 +116,92 @@ def criar_troca(
         confirmada_em=troca.confirmada_em,
         papel="solicitante",
         contraparte_identificador=ponto.identificador,
+    )
+
+
+@router.post(
+    "/trocas/{troca_id}/confirmar",
+    response_model=TrocaResponse,
+    summary="Confirmar uma troca (apenas o Ponto de Troca/fornecedora)",
+    description="Muda o status de 'pendente' para 'confirmada', registra "
+    "`confirmada_em` e incrementa o contador de trocas concluídas do ponto. "
+    "Apenas a usuária que é o Ponto de Troca daquela troca pode confirmar.",
+)
+def confirmar_troca(
+    troca_id: int,
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    troca = db.query(Troca).filter(Troca.id == troca_id).first()
+    if not troca:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Troca não encontrada")
+    if troca.ponto_id != current_usuaria.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Apenas a fornecedora (Ponto de Troca) pode confirmar a troca",
+        )
+    if troca.status != "pendente":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Troca não está pendente (status atual: {troca.status})",
+        )
+
+    troca.status = "confirmada"
+    troca.confirmada_em = _naive_utc(datetime.now(UTC))
+    # Incrementa o contador de trocas concluídas como ponto (reputação).
+    current_usuaria.trocas_como_ponto_concluidas += 1
+    db.commit()
+    db.refresh(troca)
+
+    return TrocaResponse(
+        id=troca.id,
+        valor_sats=troca.valor_sats,
+        status=troca.status,
+        criado_em=troca.criado_em,
+        confirmada_em=troca.confirmada_em,
+        papel="ponto",
+        contraparte_identificador=troca.solicitante.identificador,
+    )
+
+
+@router.post(
+    "/trocas/{troca_id}/recusar",
+    response_model=TrocaResponse,
+    summary="Recusar uma troca (apenas o Ponto de Troca/fornecedora)",
+    description="Muda o status de 'pendente' para 'recusada'. Apenas a "
+    "usuária que é o Ponto de Troca daquela troca pode recusar.",
+)
+def recusar_troca(
+    troca_id: int,
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    troca = db.query(Troca).filter(Troca.id == troca_id).first()
+    if not troca:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Troca não encontrada")
+    if troca.ponto_id != current_usuaria.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Apenas a fornecedora (Ponto de Troca) pode recusar a troca",
+        )
+    if troca.status != "pendente":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Troca não está pendente (status atual: {troca.status})",
+        )
+
+    troca.status = "recusada"
+    db.commit()
+    db.refresh(troca)
+
+    return TrocaResponse(
+        id=troca.id,
+        valor_sats=troca.valor_sats,
+        status=troca.status,
+        criado_em=troca.criado_em,
+        confirmada_em=troca.confirmada_em,
+        papel="ponto",
+        contraparte_identificador=troca.solicitante.identificador,
     )
 
 

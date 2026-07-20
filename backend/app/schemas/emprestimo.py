@@ -26,6 +26,18 @@ class EmprestimoCreateResponse(EmprestimoResponse):
     invoice_bolt11: Optional[str] = None
 
 
+class EmprestimoCreateRequest(BaseModel):
+    """Body opcional para POST /emprestimos — valor solicitado em sats.
+
+    Se omitido, solicita o limite disponível inteiro
+    (`limite_por_tier(tier) - saldo_devedor`).
+    """
+
+    valor_sats: Optional[int] = Field(
+        None, gt=0, description="Valor a solicitar em sats (default: limite disponível)"
+    )
+
+
 class PagamentoRequest(BaseModel):
     """Request body for POST /emprestimos/{id}/pagamento."""
 

@@ -20,7 +20,7 @@ class Troca(Base):
     ponto_id = Column(Integer, ForeignKey("usuarias.id"), nullable=False)
     valor_sats = Column(Integer, nullable=False)
     invoice_id = Column(String, nullable=True)
-    status = Column(String, default="pendente", nullable=False)  # pendente | confirmada | falhou
+    status = Column(String, default="pendente", nullable=False)  # pendente | confirmada | recusada | falhou
     criado_em = Column(DateTime, server_default=func.now(), nullable=False)
     confirmada_em = Column(DateTime, nullable=True)
 

@@ -68,14 +68,17 @@ def pode_emprestar(usuaria: Usuaria) -> bool:
     Condições (todas devem ser verdadeiras):
     1. tier >= 1 (recebeu pelo menos 1 aval)
     2. não congelada (tier_congelado == False)
-    3. sem saldo devedor (saldo_devedor == 0)
+    3. ainda há limite disponível (saldo_devedor < limite_por_tier(tier))
     4. avalista (se existir) também não congelada
+
+    Permite empréstimos parciais: enquanto o saldo devedor for menor que o
+    limite do tier, a usuária pode solicitar mais um empréstimo do restante.
     """
     if usuaria.tier < 1:
         return False
     if usuaria.tier_congelado:
         return False
-    if usuaria.saldo_devedor > 0:
+    if usuaria.saldo_devedor >= limite_por_tier(usuaria.tier):
         return False
     if usuaria.avalista is not None and usuaria.avalista.tier_congelado:
         return False
