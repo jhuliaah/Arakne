@@ -10,10 +10,9 @@
     splash → createAccount → recoverySetup → catalog
     (com convite:) inviteDecision → createAccount → recoverySetup → catalog
 
-  A view `backup` (BackupPage) foi substituída no onboarding pela
-  `recoverySetup` (Track 3C, Fase 3), mas permanece no router porque
-  a AulaPage ainda a referencia via onGoToBackup — será removida na
-  Fase 5.
+  A antiga BackupPage (que mostrava o mnemonic BIP-39) foi removida na
+  Fase 5 — substituída pela RecoverySetupPage (Track 3C, Fase 3), que
+  configura avalistas e distribui shares SSSS via NIP-59.
 
   Aparelho que já tem conta (identidade Nostr no localStorage):
     patternLogin (uma vez por aba) → catalog
@@ -40,22 +39,25 @@ import SemConexaoPage from "./pages/SemConexaoPage";
 import InviteDecisionPage from "./pages/InviteDecisionPage";
 import SplashPage from "./pages/onboarding/SplashPage";
 import CreateAccountPage from "./pages/onboarding/CreateAccountPage";
-import BackupPage from "./pages/onboarding/BackupPage";
 import RecoverySetupPage from "./pages/onboarding/RecoverySetupPage";
 import PatternLoginPage from "./pages/onboarding/PatternLoginPage";
+import RecoverAccountPage from "./pages/onboarding/RecoverAccountPage";
+import DemoSetupPage from "./pages/DemoSetupPage";
 import type { NavTarget } from "./components/BottomNav";
 import type { Aula } from "./types";
 import { isUnlockedThisSession } from "./api";
 import { hasStoredIdentity } from "./lib/pattern-storage";
+import { useRecoveryListener } from "./hooks/useRecoveryListener";
 
 type View =
   | "loading"
   | "splash"
   | "inviteDecision"
   | "createAccount"
-  | "backup"
   | "recoverySetup"
   | "patternLogin"
+  | "recoverAccount"
+  | "demoSetup"
   | "catalog"
   | "trilhaDetail"
   | "aula"
@@ -80,8 +82,18 @@ function getInviteCodigo(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/** True se a URL atual é /demo-setup (página de setup da demo do júri). */
+function isDemoSetupPath(): boolean {
+  return window.location.pathname === "/demo-setup";
+}
+
 export default function App() {
-  const [view, setView] = useState<View>("loading");
+  // Bootstrap síncrono: se a URL é /demo-setup, já nascemos no demoSetup —
+  // evita piscar a tela de onboarding (ou cair em patternLogin quando há
+  // identidade armazenada) antes do useEffect corrigir.
+  const [view, setView] = useState<View>(() =>
+    isDemoSetupPath() ? "demoSetup" : "loading"
+  );
   const [inviteCodigo] = useState<string | null>(getInviteCodigo());
   // Whether the person explicitly accepted the invite on the decision
   // screen — if false, CreateAccountPage gets no invite code at all.
@@ -94,6 +106,17 @@ export default function App() {
   // aos avalistas. NUNCA vai ao backend, NUNCA é persistido em plaintext.
   const [pendingNpub, setPendingNpub] = useState<string | null>(null);
   const [pendingNsec, setPendingNsec] = useState<string | null>(null);
+  // PIN gerado em criarConta (CreateAccountPage/AulaPage) — passado à
+  // RecoverySetupPage para criptografar a share 1 antes de enviar ao
+  // backend (Opção E). A dona anota esse PIN como "código de reserva".
+  const [pendingPin, setPendingPin] = useState<string | null>(null);
+  // Identidade destravada em memória após o PatternLogin. Guardamos o
+  // nsec (bytes) e o padrão para iniciar o listener de recuperação
+  // (Pendência 3: a usuária pode ser convidadora de outra dona e precisa
+  // receber shards e responder pedidos enquanto a sessão estiver
+  // ativa). Limpos no logout.
+  const [unlockedNsec, setUnlockedNsec] = useState<Uint8Array | null>(null);
+  const [unlockedPattern, setUnlockedPattern] = useState<number[] | null>(null);
   // Set when ScannerQRPage successfully reads a code — consumed once by
   // FinancialPage to pre-fill the troca form, then cleared.
   const [scannedIdentificador, setScannedIdentificador] = useState<string | null>(null);
@@ -115,10 +138,29 @@ export default function App() {
     };
   }, []);
 
+  // ── Listener de recuperação (Pendência 3) ─────────────────
+  // Roda em background enquanto a sessão está destravada. A usuária
+  // pode ser convidadora de outra dona — o listener recebe shards
+  // (distribuídas no onboarding da dona) e responde a pedidos de
+  // recuperação automaticamente, usando o cache populado em
+  // `loadSharesIntoCache` (dentro do hook). Os pedidos recebidos são
+  // expostos para futura UI de notificação (Track 4D).
+  useRecoveryListener(
+    unlockedNsec !== null,
+    unlockedNsec,
+    unlockedPattern,
+  );
+
   // ── Bootstrap: decide which screen to land on ──────────────
   // A identidade Nostr (nsec criptografado no localStorage) é a fonte de
   // verdade. Se existe, pede o desenho; senão, vai ao onboarding.
+  // Exceção: /demo-setup sempre mostra a DemoSetupPage, independente de
+  // identidade armazenada (a pessoa da demo pode rodar o setup várias vezes).
   useEffect(() => {
+    if (isDemoSetupPath()) {
+      setView("demoSetup");
+      return;
+    }
     if (hasStoredIdentity()) {
       setView(isUnlockedThisSession() ? "catalog" : "patternLogin");
     } else {
@@ -143,6 +185,14 @@ export default function App() {
 
   if (view === "loading") {
     return null;
+  }
+
+  if (view === "demoSetup") {
+    return (
+      <DemoSetupPage
+        onDone={() => setView("catalog")}
+      />
+    );
   }
 
   if (!isOnline) {
@@ -178,36 +228,27 @@ export default function App() {
       <CreateAccountPage
         inviteCodigo={usarConvite ? inviteCodigo : null}
         onBack={() => setView(inviteCodigo ? "inviteDecision" : "splash")}
-        onCreated={(npub, nsec) => {
+        onCreated={(npub, nsec, pin) => {
           setPendingNpub(npub);
           setPendingNsec(nsec);
+          setPendingPin(pin);
           setView("recoverySetup");
         }}
       />
     );
   }
 
-  if (view === "recoverySetup" && pendingNpub && pendingNsec) {
+  if (view === "recoverySetup" && pendingNpub && pendingNsec && pendingPin) {
     return (
       <RecoverySetupPage
         npub={pendingNpub}
         nsec={pendingNsec}
+        pin={pendingPin}
         onBack={() => setView("createAccount")}
         onDone={() => {
           setPendingNpub(null);
           setPendingNsec(null);
-          setView("catalog");
-        }}
-      />
-    );
-  }
-
-  if (view === "backup" && pendingNpub) {
-    return (
-      <BackupPage
-        mnemonic={pendingNpub}
-        onDone={() => {
-          setPendingNpub(null);
+          setPendingPin(null);
           setView("catalog");
         }}
       />
@@ -217,8 +258,22 @@ export default function App() {
   if (view === "patternLogin") {
     return (
       <PatternLoginPage
-        onUnlocked={() => setView("catalog")}
+        onUnlocked={(nsec, pattern) => {
+          setUnlockedNsec(nsec);
+          setUnlockedPattern(pattern);
+          setView("catalog");
+        }}
         onCreateAccount={() => setView("createAccount")}
+        onForgotPattern={() => setView("recoverAccount")}
+      />
+    );
+  }
+
+  if (view === "recoverAccount") {
+    return (
+      <RecoverAccountPage
+        onRecovered={() => setView("catalog")}
+        onBack={() => setView("patternLogin")}
       />
     );
   }
@@ -271,7 +326,14 @@ export default function App() {
     return (
       <PerfilPage
         onNavigate={(t) => setView(NAV_TO_VIEW[t])}
-        onLoggedOut={() => setView("splash")}
+        onLoggedOut={() => {
+          // Limpa a identidade destravada — o listener de recuperação
+          // para (effect cleanup) e o cache em memória é limpo pelo
+          // PerfilPage via `clearSharesCache()`.
+          setUnlockedNsec(null);
+          setUnlockedPattern(null);
+          setView("splash");
+        }}
         onVerMeuCodigo={() => setView("meuQRCode")}
       />
     );
@@ -299,9 +361,11 @@ export default function App() {
         onConcluida={() => setView("trilhaDetail")}
         onNavigate={(t) => setView(NAV_TO_VIEW[t])}
         onRevealFinancial={() => setView("financial")}
-        onGoToBackup={(npub) => {
+        onGoToRecoverySetup={(npub, nsec, pin) => {
           setPendingNpub(npub);
-          setView("backup");
+          setPendingNsec(nsec);
+          setPendingPin(pin);
+          setView("recoverySetup");
         }}
       />
     );

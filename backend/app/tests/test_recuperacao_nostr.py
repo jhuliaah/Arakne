@@ -5,12 +5,12 @@ Cobre:
 - GET /usuarias/me retorna npub
 - POST /usuarias sem npub → npub é null
 - POST /usuarias com npub duplicado → 400
-- Cadastro cria 3 slots de avalistas de recuperação automaticamente
-- GET /usuarias/me/avalistas-recuperacao (auth) retorna 3 slots em bech32 npub1...
+- Cadastro sem convidadora → 0 slots de avalistas (estratégia Option E)
+- Cadastro com convidadora com npub → 1 slot (ordem=1, is_shadow=False)
+- Cadastro com convidadora sem npub → 0 slots (sem shadow fallback)
+- GET /usuarias/me/avalistas-recuperacao (auth) retorna slots em bech32 npub1...
 - GET /usuarias/by-identificador/{id}/npub (sem auth) retorna npub em bech32
 - GET /usuarias/by-identificador/{id}/avalistas-recuperacao (sem auth) retorna lista
-- Convidadora com npub → slot 1 é a convidadora (is_shadow=False)
-- Convidadora sem npub → slot 1 é shadow
 - Conversão hex → bech32 npub1... (NIP-19) na serialização
 """
 
@@ -74,11 +74,15 @@ def test_cadastro_com_npub_duplicado_rejeita(client, db_session):
 
 # ── Testes de avalistas de recuperação no cadastro ───────────
 
-def test_cadastro_cria_3_slots_de_recuperacao(client, db_session):
-    """Cadastro sem convidadora → 3 slots, todos shadow, npub em bech32."""
+def test_cadastro_sem_convidadora_nao_cria_slots(client, db_session):
+    """Cadastro sem convidadora → 0 slots (estratégia Option E, T=2 N=2).
+
+    Sem convidadora, não há npub para enviar o share 0 via Nostr — a dona
+    usa paper backup (frontend). O share 1 vai ao backend via
+    /usuarias/me/recovery-share. Nenhum slot de npub é criado aqui.
+    """
     u = _criar_usuaria(client)
 
-    # Use the authed endpoint to verify
     token = _login(client, u["identificador"])
     resp = client.get(
         "/usuarias/me/avalistas-recuperacao",
@@ -86,23 +90,13 @@ def test_cadastro_cria_3_slots_de_recuperacao(client, db_session):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["avalistas"]) == 3
-    ordens = [a["ordem"] for a in data["avalistas"]]
-    assert sorted(ordens) == [1, 2, 3]
-    # Sem convidadora → todos shadow
-    assert all(a["is_shadow"] is True for a in data["avalistas"])
-    # Todos têm npub em bech32 npub1... (convertido do hex armazenado)
-    for a in data["avalistas"]:
-        assert a["npub_avaliadora"].startswith("npub1")
-        assert len(a["npub_avaliadora"]) == 63  # 5 + 52 data + 6 checksum
+    assert data["avalistas"] == []
 
 
-def test_cadastro_com_convidadora_com_npub_slot1_eh_convidadora(client, db_session):
-    """Convidadora com npub → slot 1 é a convidadora (is_shadow=False)."""
+def test_cadastro_com_convidadora_com_npub_cria_1_slot(client, db_session):
+    """Convidadora com npub → 1 slot (ordem=1, is_shadow=False)."""
     # 1. Convidadora com npub
     convidadora = _criar_usuaria(client, npub="c" * 64)
-    # Promover para tier 3 para poder convidar (não necessário para o fluxo
-    # de cadastro, mas garante consistência com o motor de risco)
     usuaria_c = (
         db_session.query(Usuaria)
         .filter(Usuaria.identificador == convidadora["identificador"])
@@ -119,7 +113,7 @@ def test_cadastro_com_convidadora_com_npub_slot1_eh_convidadora(client, db_sessi
         codigo_indicacao=convidadora["codigo_indicacao"],
     )
 
-    # 3. Slot 1 deve ser a convidadora (is_shadow=False, npub da convidadora)
+    # 3. Exatamente 1 slot, ordem=1, is_shadow=False, npub da convidadora
     token = _login(client, nova["identificador"], pin="5678")
     resp = client.get(
         "/usuarias/me/avalistas-recuperacao",
@@ -127,23 +121,17 @@ def test_cadastro_com_convidadora_com_npub_slot1_eh_convidadora(client, db_sessi
     )
     assert resp.status_code == 200
     avalistas = resp.json()["avalistas"]
-    assert len(avalistas) == 3
-    slot1 = next(a for a in avalistas if a["ordem"] == 1)
+    assert len(avalistas) == 1
+    slot1 = avalistas[0]
+    assert slot1["ordem"] == 1
     assert slot1["is_shadow"] is False
     # npub retornado em bech32 — deve corresponder ao hex "c"*64 armazenado
     assert slot1["npub_avaliadora"] == npub_encode("c" * 64)
     assert slot1["npub_avaliadora"].startswith("npub1")
-    # Slots 2 e 3 são shadows
-    slot2 = next(a for a in avalistas if a["ordem"] == 2)
-    slot3 = next(a for a in avalistas if a["ordem"] == 3)
-    assert slot2["is_shadow"] is True
-    assert slot3["is_shadow"] is True
-    assert slot2["npub_avaliadora"].startswith("npub1")
-    assert slot3["npub_avaliadora"].startswith("npub1")
 
 
-def test_cadastro_com_convidadora_sem_npub_slot1_eh_shadow(client, db_session):
-    """Convidadora sem npub → slot 1 também é shadow."""
+def test_cadastro_com_convidadora_sem_npub_nao_cria_slots(client, db_session):
+    """Convidadora sem npub → 0 slots (sem shadow fallback, Option E)."""
     convidadora = _criar_usuaria(client)  # sem npub
     usuaria_c = (
         db_session.query(Usuaria)
@@ -165,8 +153,7 @@ def test_cadastro_com_convidadora_sem_npub_slot1_eh_shadow(client, db_session):
         headers={"Authorization": f"Bearer {token}"},
     )
     avalistas = resp.json()["avalistas"]
-    assert len(avalistas) == 3
-    assert all(a["is_shadow"] is True for a in avalistas)
+    assert avalistas == []
 
 
 # ── Testes de descoberta pública (sem auth) ──────────────────
@@ -211,15 +198,17 @@ def test_get_npub_by_identificador_inexistente_404(client, db_session):
 
 
 def test_get_avalistas_recuperacao_by_identificador_sem_auth(client, db_session):
-    """GET /usuarias/by-identificador/{id}/avalistas-recuperacao (sem auth)."""
+    """GET /usuarias/by-identificador/{id}/avalistas-recuperacao (sem auth).
+
+    Sem convidadora → 0 slots (estratégia Option E).
+    """
     u = _criar_usuaria(client, npub="f" * 64)
     resp = client.get(
         f"/usuarias/by-identificador/{u['identificador']}/avalistas-recuperacao"
     )
     assert resp.status_code == 200
     avalistas = resp.json()["avalistas"]
-    assert len(avalistas) == 3
-    assert sorted(a["ordem"] for a in avalistas) == [1, 2, 3]
+    assert avalistas == []
 
 
 def test_get_avalistas_recuperacao_by_identificador_inexistente_404(client, db_session):
@@ -271,3 +260,74 @@ def test_bech32_npub_encode_round_trip_com_referencia():
     hex_key = "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaefa2cd0d"
     expected = ref.bech32_encode("npub", ref.convertbits(bytes.fromhex(hex_key), 8, 5))
     assert npub_encode(hex_key) == expected
+
+
+# ── Testes do PATCH /usuarias/me/npub ─────────────────────────
+
+def test_update_npub(client, db_session):
+    """PATCH /usuarias/me/npub atualiza o npub da usuária logada."""
+    u = _criar_usuaria(client)  # sem npub
+    assert u["npub"] is None
+
+    token = _login(client, u["identificador"])
+
+    # PATCH com novo npub
+    novo_npub = "a" * 64
+    resp = client.patch(
+        "/usuarias/me/npub",
+        json={"npub": novo_npub},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["npub"] == novo_npub
+
+    # GET /usuarias/me confirma
+    resp_get = client.get(
+        "/usuarias/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp_get.status_code == 200
+    assert resp_get.json()["npub"] == novo_npub
+
+
+def test_update_npub_sem_auth_401(client, db_session):
+    """PATCH /usuarias/me/npub sem token → 401."""
+    resp = client.patch(
+        "/usuarias/me/npub",
+        json={"npub": "a" * 64},
+    )
+    assert resp.status_code == 401
+
+
+def test_update_npub_duplicado_rejeita(client, db_session):
+    """PATCH com npub já usado por outra usuária → 400."""
+    # Usuária 1 já tem npub
+    _criar_usuaria(client, npub="b" * 64)
+
+    # Usuária 2 sem npub
+    u2 = _criar_usuaria(client, pin="5678")
+    token = _login(client, u2["identificador"], pin="5678")
+
+    # Tenta setar o mesmo npub da usuária 1
+    resp = client.patch(
+        "/usuarias/me/npub",
+        json={"npub": "b" * 64},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 400
+    assert "npub" in resp.json()["detail"].lower()
+
+
+def test_update_npub_idempotente(client, db_session):
+    """PATCH com o mesmo npub que já está armazenado → 200 (idempotente)."""
+    npub = "c" * 64
+    u = _criar_usuaria(client, npub=npub)
+    token = _login(client, u["identificador"])
+
+    resp = client.patch(
+        "/usuarias/me/npub",
+        json={"npub": npub},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["npub"] == npub

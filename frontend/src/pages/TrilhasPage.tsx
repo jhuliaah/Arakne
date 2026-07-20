@@ -7,6 +7,7 @@ import SearchBar from "../components/SearchBar";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
 import { listarTrilhas } from "../api";
 import type { Trilha } from "../types";
+import { useDelayedFlag } from "../lib/useDelayedFlag";
 
 const TECNICAS = ["Todas", "Costura", "Crochê", "Bordado", "Tricô", "Patchwork"];
 const ESTILOS = ["Todos", "Tradicional", "Regional", "Industrial", "Para Venda", "Especial"];
@@ -25,15 +26,25 @@ export default function TrilhasPage({
   inviteCodigo,
 }: TrilhasPageProps) {
   const [trilhas, setTrilhas] = useState<Trilha[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [tecnica, setTecnica] = useState("Todas");
   const [estilo, setEstilo] = useState("Todos");
   const [query, setQuery] = useState("");
   const [filterApplied, setFilterApplied] = useState(false);
+  const showSkeleton = useDelayedFlag(trilhas === null && !loadError);
 
   useEffect(() => {
     const t = tecnica === "Todas" ? undefined : tecnica;
     const e = estilo === "Todos" ? undefined : estilo;
-    listarTrilhas(t, e).then((data) => setTrilhas(data));
+    setTrilhas(null);
+    setLoadError(false);
+    listarTrilhas(t, e).then((data) => {
+      if (data === null) {
+        setLoadError(true);
+      } else {
+        setTrilhas(data);
+      }
+    });
   }, [tecnica, estilo]);
 
   const filtered = (() => {
@@ -98,7 +109,14 @@ export default function TrilhasPage({
           ))}
         </div>
 
-        {filtered === null ? (
+        {loadError ? (
+          <div className="catalog__empty">
+            <p>Não conseguimos carregar as trilhas agora.</p>
+            <p style={{ marginTop: "0.5rem", fontSize: "0.85rem" }}>
+              Verifique sua conexão e tente novamente em instantes.
+            </p>
+          </div>
+        ) : showSkeleton && filtered === null ? (
           <div className="trilhas__grid">
             {[1, 2, 3].map((i) => (
               <div className="skeleton-card" key={i} aria-hidden="true">
@@ -111,7 +129,7 @@ export default function TrilhasPage({
               </div>
             ))}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : filtered === null ? null : filtered.length === 0 ? (
           <p className="catalog__empty">Nenhuma trilha encontrada.</p>
         ) : (
           <div className="trilhas__grid">

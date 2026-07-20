@@ -498,12 +498,14 @@ export default function RecoverAccountPage({
           </div>
         )}
 
-        {/* Estado 4 — Desenhar novo padrão */}
+        {/* Estado 4 — Aula disfarçada de novo ponto (§5.2: "uma aula de um
+            ponto novo" cuja coreografia É a definição do novo Ponto Arakne) */}
         {phase === "newPattern" && (
           <>
-            <h1 className="onboarding__title">Fios reatados!</h1>
+            <h1 className="onboarding__title">Aula: Ponto Renascido</h1>
             <p className="onboarding__tagline">
-              Desenhe um novo Ponto Arakne para guardar seu ateliê.
+              Sua tecelã reatou os fios. Agora aprenda um ponto novo para
+              guardar seu ateliê — desenhe a coreografia abaixo.
             </p>
 
             <div style={{ width: "100%", maxWidth: "420px" }}>

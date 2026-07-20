@@ -14,6 +14,11 @@ from app.models import (  # noqa: F401 — import so tables are registered
     Aval,
     AvalistaRecuperacao,
     Troca,
+    Trilha,
+    Aula,
+    Material,
+    ProgressoAula,
+    RecoveryShareBackup,
     PagamentoPix,
     CustodiaMultisig,
 )
@@ -25,6 +30,7 @@ from app.routers import (
     health,
     pix,
     pontos_troca,
+    trilhas,
     usuarias,
 )
 
@@ -76,6 +82,7 @@ app.include_router(usuarias.router)
 app.include_router(avais.router)
 app.include_router(emprestimos.router)
 app.include_router(pontos_troca.router)
+app.include_router(trilhas.router)
 app.include_router(pix.router)
 app.include_router(custodia.router)
 

@@ -73,6 +73,11 @@ export interface Material {
   titulo: string;
   ordem: number;
   legenda: string | null;
+  // Campos opcionais para atribuição e metadados (Passo 2 do plano de trilhas).
+  licenca?: string | null;
+  fonte?: string | null;
+  duracao_seg?: number | null;
+  thumbnail_url?: string | null;
 }
 
 export interface Aula {

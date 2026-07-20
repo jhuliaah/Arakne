@@ -15,15 +15,23 @@ import Header from "../../components/Header";
 import HexPatternCanvas from "../../components/HexPatternCanvas";
 import { markUnlockedThisSession } from "../../api";
 import { hasStoredIdentity, unlockWithPattern } from "../../lib/pattern-storage";
+import { decodeNsec } from "../../lib/nostr-keys";
 
 interface PatternLoginPageProps {
-  onUnlocked: () => void;
+  /** Chamado quando o padrão destrava a identidade. Recebe o nsec
+   *  (bytes, 32) e o padrão desenhado — o App usa esses dados para
+   *  iniciar o listener de recuperação (Pendência 3: a usuária pode
+   *  ser convidadora de outra dona e precisa receber/responder pedidos
+   *  de recuperação enquanto a sessão estiver ativa). */
+  onUnlocked: (nsec: Uint8Array, pattern: number[]) => void;
   onCreateAccount: () => void;
+  /** "Esqueci meu Ponto Arakne" → vai para RecoverAccountPage. */
+  onForgotPattern: () => void;
 }
 
 const MAX_ATTEMPTS = 8;
 
-export default function PatternLoginPage({ onUnlocked, onCreateAccount }: PatternLoginPageProps) {
+export default function PatternLoginPage({ onUnlocked, onCreateAccount, onForgotPattern }: PatternLoginPageProps) {
   const [error, setError] = useState(false);
   const [attempts, setAttempts] = useState(0);
   const [resetKey, setResetKey] = useState(0);
@@ -32,6 +40,9 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount }: Patter
   // Sem identidade armazenada neste aparelho — não há o que destravar.
   // (Bootstrap do App.tsx normalmente impede chegar aqui, mas o guard
   // protege contra navegação manual via "Já tenho conta" no splash.)
+  // Oferece tanto criar conta nova quanto recuperar uma conta existente
+  // (a usuária pode ter saído da conta neste aparelho e querer voltar
+  // pelo fluxo de recuperação social).
   if (!hasStoredIdentity()) {
     return (
       <div className="page">
@@ -40,11 +51,15 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount }: Patter
           <div className="onboarding__glyph">🧶</div>
           <h1 className="onboarding__title">Nenhuma conta neste aparelho</h1>
           <p className="onboarding__tagline">
-            Para entrar, crie sua conta e desenhe seu Ponto Arakne.
+            Para entrar, crie sua conta e desenhe seu Ponto Arakne — ou
+            recupere uma conta que você já tem em outro aparelho.
           </p>
           <div className="onboarding__form">
             <button className="btn btn--primary" onClick={onCreateAccount}>
               Criar conta
+            </button>
+            <button className="btn btn--secondary" onClick={onForgotPattern}>
+              Recuperar conta
             </button>
           </div>
         </main>
@@ -59,7 +74,10 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount }: Patter
 
     if (identity) {
       markUnlockedThisSession();
-      onUnlocked();
+      // NostrIdentity.nsec é bech32 (string) — decodifica para bytes
+      // (32 bytes) para o listener de recuperação (NIP-59 usa bytes).
+      const nsecBytes = decodeNsec(identity.nsec);
+      onUnlocked(nsecBytes, pattern);
       return;
     }
 
@@ -130,6 +148,12 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount }: Patter
               Tentativa {attempts} de {MAX_ATTEMPTS}
             </p>
           )}
+
+          <div className="onboarding__footer-link">
+            <button type="button" onClick={onForgotPattern}>
+              Esqueci meu Ponto Arakne
+            </button>
+          </div>
         </div>
       </main>
     </div>

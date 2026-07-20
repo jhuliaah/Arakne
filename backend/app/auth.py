@@ -6,7 +6,7 @@ Session tokens are opaque random strings stored in the `sessoes` table.
 """
 
 import secrets
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 import bcrypt
@@ -17,6 +17,19 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.sessao import Sessao
 from app.models.usuaria import Usuaria
+
+
+def _naive_utc(dt: datetime) -> datetime:
+    """Normalize a datetime to a timezone-naive UTC value.
+
+    SQLite stores datetimes without timezone info, so values read back from
+    the DB are naive. Comparing them with timezone-aware datetimes raises
+    TypeError. This helper strips tzinfo (converting to UTC first if aware)
+    so comparisons are always safe.
+    """
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
+    return dt
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
@@ -54,7 +67,7 @@ def generate_codigo_indicacao() -> str:
 def create_session(db: Session, usuaria_id: int) -> Sessao:
     """Create a new session token in the database."""
     token = secrets.token_urlsafe(32)
-    expira_em = datetime.utcnow() + timedelta(days=TOKEN_EXPIRY_DAYS)
+    expira_em = _naive_utc(datetime.now(UTC)) + timedelta(days=TOKEN_EXPIRY_DAYS)
     sessao = Sessao(
         usuaria_id=usuaria_id,
         token=token,
@@ -80,7 +93,7 @@ async def get_current_usuaria(
             detail="Token inválido",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if sessao.expira_em and sessao.expira_em < datetime.utcnow():
+    if sessao.expira_em and _naive_utc(sessao.expira_em) < _naive_utc(datetime.now(UTC)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expirado",

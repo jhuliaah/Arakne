@@ -1,13 +1,5 @@
-/** Financial page — disguised as "Meus Fios".
+ /** Tela do ateliê — painel da artesã depois de entrar com o código. */
 
-  All financial terms are disguised:
-  - Empréstimo = "Fio de Esperança"
-  - Quitação / pagamento = "Retorno do Fio"
-  - Tier = "nível"
-  - Saldo devedor = "fio em aberto"
-  - Limite = "materiais disponíveis"
-  - Sats = just numbers, no unit
-*/
 
 import { useEffect, useState, useCallback } from "react";
 import Header from "../components/Header";
@@ -27,6 +19,7 @@ import {
 } from "../api";
 import type { ConviteResponse } from "../api";
 import type { Emprestimo, PontoDeTroca, Usuaria } from "../types";
+import { useDelayedFlag } from "../lib/useDelayedFlag";
 
 interface FinancialPageProps {
   onBack: () => void;
@@ -60,6 +53,7 @@ export default function FinancialPage({
   const [usuaria, setUsuaria] = useState<Usuaria | null>(null);
   const [emprestimos, setEmprestimos] = useState<Emprestimo[]>([]);
   const [loading, setLoading] = useState(true);
+  const showSkeleton = useDelayedFlag(loading);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [convite, setConvite] = useState<ConviteResponse | null>(null);
@@ -83,8 +77,8 @@ export default function FinancialPage({
     result: { quitado: boolean; tier: number; saldo_devedor: number } | null;
   }>({ open: false, emprestimo: null, valor: "", processing: false, result: null });
 
-  // Invoice display state (shown after requesting a kit)
-  const [invoiceDisplay, setInvoiceDisplay] = useState<Emprestimo | null>(null);
+  // Confirmação de "Puxar novelos" (substitui a exibição da invoice)
+  const [liberadoDisplay, setLiberadoDisplay] = useState<Emprestimo | null>(null);
 
   // Tier upgrade animation
   const [tierUpgraded, setTierUpgraded] = useState<number | null>(null);
@@ -222,11 +216,11 @@ export default function FinancialPage({
     if (emp) {
       addEmprestimoId(emp.id);
       setEmprestimos((prev) => [emp, ...prev]);
-      // Show invoice display
-      setInvoiceDisplay(emp);
+      // Mostra só a confirmação amigável (sem exibir invoice/bolt11)
+      setLiberadoDisplay(emp);
       await loadData();
     } else {
-      setError("Não foi possível pedir o fio no momento.");
+      setError("Não foi possível puxar novelos agora.");
     }
     setActionLoading(false);
   };
@@ -282,16 +276,16 @@ export default function FinancialPage({
     } else {
       setRepayModal((prev) => ({ ...prev, processing: false }));
       setError(
-        "Não conseguimos confirmar o retorno do fio. Pode ser que tenha falhado, ou que ainda esteja em confirmação — confira o histórico antes de tentar de novo, pra evitar duplicar o pagamento."
+        "Não conseguimos confirmar a devolução agora. Pode ser que tenha falhado, ou que ainda esteja em confirmação — confira o registro de padrões antes de tentar de novo, pra evitar duplicar a devolução."
       );
       closeRepayModal();
     }
   };
 
-  // ── Invoice display handlers ─────────────────────────────────
+  // ── Confirmação "Puxar novelos" ─────────────────────────────
 
-  const closeInvoiceDisplay = () => {
-    setInvoiceDisplay(null);
+  const closeLiberadoDisplay = () => {
+    setLiberadoDisplay(null);
   };
 
   // ── Render ───────────────────────────────────────────────────
@@ -300,10 +294,26 @@ export default function FinancialPage({
     return (
       <div className="page theme-financial">
         <Header />
-        <div className="loading">
-          <div className="spinner" />
-          <p>Carregando...</p>
-        </div>
+        <main className="financial">
+          <button className="financial__back" onClick={onBack} aria-label="Voltar">
+            ← Voltar aos padrões
+          </button>
+          <h2 className="financial__title">Seu ateliê</h2>
+          {showSkeleton && (
+            <div className="trilhas__grid" aria-hidden="true">
+              {[1, 2, 3].map((i) => (
+                <div className="skeleton-card" key={i}>
+                  <div className="skeleton skeleton-card__visual" />
+                  <div className="skeleton-card__body">
+                    <div className="skeleton skeleton--text" />
+                    <div className="skeleton skeleton--text skeleton--short" />
+                    <div className="skeleton skeleton--bar" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </main>
       </div>
     );
   }
@@ -322,7 +332,7 @@ export default function FinancialPage({
           <span className="financial__brand-tagline">Tecemos possibilidades. Você cria sua história.</span>
         </div>
 
-        <h2 className="financial__title">Meus Fios</h2>
+        <h2 className="financial__title">Seu ateliê</h2>
 
         {error && (
           <div className="financial__error">
@@ -335,7 +345,7 @@ export default function FinancialPage({
         {tierUpgraded !== null && (
           <div className="financial__tier-upgrade">
             <span className="financial__tier-upgrade-emoji">🎉</span>
-            <span>Nível subiu para {TIER_LABELS[tierUpgraded] ?? tierUpgraded}!</span>
+            <span>Nova técnica disponível: {TIER_LABELS[tierUpgraded] ?? tierUpgraded}. Você desbloqueou uma capacidade nova no seu ateliê.</span>
           </div>
         )}
 
@@ -360,27 +370,34 @@ export default function FinancialPage({
 
         {usuaria?.tier_congelado && (
           <div className="financial__error" style={{ margin: "0 20px 1rem" }}>
-            <strong>Seu nível está pausado.</strong> Alguém que você avalizou
-            não devolveu o fio dela a tempo, e isso pausa o seu nível também —
-            é assim que o sistema protege o grupo. Assim que a dívida dela for
-            resolvida, seu nível volta ao normal automaticamente. Você ainda
-            pode usar tudo o que já tem disponível enquanto isso.
+            <strong>Padrão esperando você voltar.</strong> Uma parceira de fio
+            sua ainda não terminou o padrão dela, e isso pausa o seu ateliê
+            também — é assim que o sistema protege o grupo. Assim que o padrão
+            dela voltar a andar, seu ateliê volta ao normal automaticamente.
+            Você ainda pode usar tudo o que já tem disponível enquanto isso.
           </div>
         )}
 
         {/* Balance cards */}
         <div className="financial__row">
           <div className="financial__card">
-            <div className="financial__card-label">Materiais Disponíveis</div>
-            <div className="financial__card-value">{limite.toLocaleString("pt-BR")}</div>
+            <div className="financial__card-label">Material disponível</div>
+            <div className="financial__card-value">
+              {limite.toLocaleString("pt-BR")} <span className="financial__card-unit">novelo(s)</span>
+            </div>
           </div>
           <div className="financial__card">
-            <div className="financial__card-label">Materiais em Uso</div>
+            <div className="financial__card-label">Padrão em andamento</div>
             <div className="financial__card-value">
-              {(usuaria?.saldo_devedor ?? 0).toLocaleString("pt-BR")}
+              {(usuaria?.saldo_devedor ?? 0).toLocaleString("pt-BR")} <span className="financial__card-unit">novelo(s)</span>
             </div>
           </div>
         </div>
+
+        {/* Estoque capacity hint */}
+        <p className="field__hint" style={{ margin: "0 20px 0.75rem" }}>
+          Capacidade do seu estoque: até {limite.toLocaleString("pt-BR")} novelos.
+        </p>
 
         {/* Action button */}
         {podeEmprestar && (
@@ -389,35 +406,35 @@ export default function FinancialPage({
             onClick={handleSolicitarKit}
             disabled={actionLoading}
           >
-            {actionLoading ? "Solicitando..." : "Pedir um Fio de Esperança"}
+            {actionLoading ? "Puxando..." : "Puxar novelos"}
           </button>
         )}
 
         {/* History */}
         <div className="financial__history">
-          <h3 className="financial__history-title">Histórico de Fios</h3>
+          <h3 className="financial__history-title">Padrões recentes</h3>
           <button
             className="financial__btn financial__btn--small"
             style={{ marginBottom: "0.75rem" }}
             onClick={onVerExtrato}
           >
-            Ver extrato completo
+            Ver registro de padrões
           </button>
           {emprestimos.length === 0 ? (
-            <p className="financial__empty">Nenhum fio pedido ainda.</p>
+            <p className="financial__empty">Nenhum padrão puxado ainda.</p>
           ) : (
             <ul className="financial__list">
               {emprestimos.map((emp) => (
                 <li key={emp.id} className="financial__list-item">
                   <div className="financial__list-info">
-                    <span className="financial__list-name">Fio #{emp.id}</span>
+                    <span className="financial__list-name">Padrão #{emp.id}</span>
                     <span className="financial__list-date">
                       {new Date(emp.criado_em).toLocaleDateString("pt-BR")}
                     </span>
                   </div>
                   <div className="financial__list-right">
                     <span className="financial__list-amount">
-                      {emp.valor_sats.toLocaleString("pt-BR")}
+                      {emp.valor_sats.toLocaleString("pt-BR")} novelo(s)
                     </span>
                     {emp.status === "ativo" ? (
                       <button
@@ -425,10 +442,10 @@ export default function FinancialPage({
                         onClick={() => openRepayModal(emp)}
                         disabled={actionLoading}
                       >
-                        Concluir Padrão
+                        Devolver novelos
                       </button>
                     ) : (
-                      <span className="financial__list-badge">Concluído</span>
+                      <span className="financial__list-badge">Padrão concluído! 🧵</span>
                     )}
                   </div>
                 </li>
@@ -570,31 +587,30 @@ export default function FinancialPage({
                   {repayModal.result.quitado ? "🎉" : "✅"}
                 </div>
                 <h3 className="repay-result__title">
-                  {repayModal.result.quitado ? "Fio Devolvido por Completo!" : "Retorno do Fio registrado!"}
+                  {repayModal.result.quitado ? "Padrão concluído! 🧵" : "Devolução registrada!"}
                 </h3>
                 <p className="repay-result__text">
                   {repayModal.result.quitado
-                    ? `Seu nível subiu para ${TIER_LABELS[repayModal.result.tier] ?? repayModal.result.tier}!`
-                    : `Fio em aberto: ${repayModal.result.saldo_devedor.toLocaleString("pt-BR")}`}
+                    ? "Você terminou essa peça. Um novo nível de técnica foi desbloqueado."
+                    : `Faltam ${repayModal.result.saldo_devedor.toLocaleString("pt-BR")} novelo(s) pra terminar esse padrão.`}
                 </p>
               </div>
             ) : (
               // ── Input view ──
               <>
-                <h3 className="modal__title">Devolver o Fio</h3>
+                <h3 className="modal__title">Devolver novelos</h3>
                 <p className="modal__text">
-                  Fio #{repayModal.emprestimo.id} — Valor total:{" "}
-                  {repayModal.emprestimo.valor_sats.toLocaleString("pt-BR")}
+                  Quanto você quer devolver hoje?
                 </p>
 
                 {usuaria && usuaria.saldo_devedor > 0 && (
                   <p className="modal__hint">
-                    Fio em aberto: {usuaria.saldo_devedor.toLocaleString("pt-BR")}
+                    Padrão em andamento: {usuaria.saldo_devedor.toLocaleString("pt-BR")} novelo(s)
                   </p>
                 )}
 
                 <label className="modal__label" htmlFor="repay-valor">
-                  Quanto você quer pagar?
+                  Quanto você quer devolver?
                 </label>
                 <input
                   id="repay-valor"
@@ -604,7 +620,7 @@ export default function FinancialPage({
                   onChange={(e) => setRepayModal((prev) => ({ ...prev, valor: e.target.value }))}
                   min={1}
                   max={repayModal.emprestimo.valor_sats}
-                  placeholder="Valor"
+                  placeholder="Quantos novelos"
                   autoFocus
                 />
 
@@ -642,7 +658,7 @@ export default function FinancialPage({
                     onClick={handleRepay}
                     disabled={repayModal.processing || !repayModal.valor || parseInt(repayModal.valor, 10) <= 0}
                   >
-                    {repayModal.processing ? "Processando..." : "Devolver o Fio"}
+                    {repayModal.processing ? "Processando..." : "Confirmar devolução"}
                   </button>
                 </div>
               </>
@@ -651,26 +667,18 @@ export default function FinancialPage({
         </div>
       )}
 
-      {/* ── Invoice display modal ───────────────────────────── */}
-      {invoiceDisplay && invoiceDisplay.invoice_bolt11 && (
-        <div className="modal-overlay" onClick={closeInvoiceDisplay}>
+      {/* ── Confirmação "Puxar novelos" ────────────────────── */}
+      {liberadoDisplay && (
+        <div className="modal-overlay" onClick={closeLiberadoDisplay}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3 className="modal__title">Fio de Esperança liberado! 🧶</h3>
+            <h3 className="modal__title">Padrão liberado!</h3>
             <p className="modal__text">
-              Seu Fio de Esperança foi liberado com sucesso.
-              Valor: {invoiceDisplay.valor_sats.toLocaleString("pt-BR")}
-            </p>
-            <div className="invoice-box">
-              <p className="invoice-box__label">Invoice Lightning:</p>
-              <code className="invoice-box__code">{invoiceDisplay.invoice_bolt11}</code>
-            </div>
-            <p className="modal__hint">
-              Para concluir o padrão, use o botão "Concluir Padrão" no histórico.
+              Seus novelos já estão no seu estoque. Boa costura.
             </p>
             <div className="modal__actions">
               <button
                 className="financial__btn financial__btn--primary financial__btn--small"
-                onClick={closeInvoiceDisplay}
+                onClick={closeLiberadoDisplay}
               >
                 Entendi
               </button>

@@ -101,18 +101,18 @@ def run_demo(api_url: str):
     assert health["status"] == "ok"
     ok(f"Backend OK ({api_url})")
 
-    step("1. Seed — resetando banco + criando Usuária A...")
+    step("1. Seed — resetando banco + criando Fundadora...")
     # Import and run seed directly (same process)
-    from seed_demo import reset_database, seed_usuaria_a
+    from seed_demo import reset_database, seed_fundadora
     reset_database()
-    seed_usuaria_a()
-    ok("Usuária A pronta (tier 1, saldo 0)")
+    seed_fundadora()
+    ok("Fundadora pronta (tier 3, saldo 0)")
 
-    step("2. Usuária B nasce pelo convite de A...")
-    # POST /usuarias with codigo_indicacao = A's invite code
+    step("2. Usuária B nasce pelo convite da Fundadora...")
+    # POST /usuarias with codigo_indicacao = Fundadora's invite code
     b_resp = api_post(f"{api_url}/usuarias", {
         "pin": "5678",
-        "codigo_indicacao": "DEMO_A_INVITE",
+        "codigo_indicacao": "FUNDADORA_INVITE",
     })
     b_ident = b_resp["identificador"]
     ok(f"Usuária B criada: {b_ident}")

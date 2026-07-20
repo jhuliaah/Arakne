@@ -4,7 +4,7 @@
  *  um padrão hexagonal (Ponto Arakne) que vira a senha de destravamento.
  *  O nsec é criptografado com AES-GCM-256 + PBKDF2 do padrão e guardado
  *  no localStorage. O npub (chave pública bech32) é o identificador de
- *  backup — anotado em QR/papel — mostrado na próxima tela (BackupPage).
+ *  backup — anotado em QR/papel — usado na próxima tela (RecoverySetupPage).
  *
  *  A conta do backend ainda é criada com um PIN aleatório interno (nunca
  *  mostrado à usuária) para manter a integração financeira existente.
@@ -22,11 +22,13 @@ interface CreateAccountPageProps {
   inviteCodigo?: string | null;
   onBack: () => void;
   /** Chamado quando o padrão foi confirmado e a identidade Nostr criada.
-   *  Recebe npub (chave pública bech32 — mostrada na próxima tela) e
+   *  Recebe npub (chave pública bech32 — mostrada na próxima tela),
    *  nsec (chave privada bech32 — passada adiante para distribuir os
-   *  shards SSSS aos avalistas). O nsec NÃO é persistido em plaintext;
-   *  ele só existe em memória entre esta tela e a RecoverySetupPage. */
-  onCreated: (npub: string, nsec: string) => void;
+   *  shards SSSS aos avalistas) e o PIN gerado (usado para criptografar
+   *  a share 1 antes de enviar ao backend — Opção E). O nsec NÃO é
+   *  persistido em plaintext; ele só existe em memória entre esta tela e
+   *  a RecoverySetupPage. */
+  onCreated: (npub: string, nsec: string, pin: string) => void;
 }
 
 export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: CreateAccountPageProps) {
@@ -54,7 +56,7 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
       }
 
       if (nome.trim()) setNickname(nome.trim());
-      onCreated(identity.npub, identity.nsec);
+      onCreated(identity.npub, identity.nsec, pin);
     } catch {
       setError("Algo deu errado ao guardar seu desenho. Tente novamente.");
       setLoading(false);

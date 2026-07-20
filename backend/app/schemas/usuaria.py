@@ -45,6 +45,18 @@ class UsuariaResponse(BaseModel):
     npub: Optional[str] = None
 
 
+class NpubUpdate(BaseModel):
+    """Request body for PATCH /usuarias/me/npub — atualiza o npub da usuária."""
+
+    npub: str = Field(
+        ...,
+        min_length=10,
+        description="Chave pública Nostr (npub1... ou hex de 64 chars) da "
+        "usuária. Usado pela página de setup da demo para definir o npub "
+        "da Fundadora após a geração do par nsec/npub no frontend.",
+    )
+
+
 class ConviteResponse(BaseModel):
     """Response for GET /usuarias/me/convite — invite link data."""
 

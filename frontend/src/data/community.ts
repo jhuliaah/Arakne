@@ -2,7 +2,7 @@
  *
  *  These are purely decorative (no backend entity behind a "grupo" or
  *  "post" exists, same as the pattern catalog). The one real feature on
- *  this page is the invite button, which maps to the actual aval/vouch
+ *  this page is the invite button, which maps to the actual invite
  *  mechanism via GET /usuarias/me/convite.
  */
 

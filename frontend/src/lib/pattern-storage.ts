@@ -86,6 +86,11 @@ export async function createAndStoreIdentity(
   localStorage.setItem(STORAGE_KEYS.nsecEncrypted, blob);
   localStorage.setItem(STORAGE_KEYS.patternHash, hash);
   localStorage.setItem(STORAGE_KEYS.npub, identity.npub);
+  // Limpa o flag de distribuição de recuperação da conta anterior — cada
+  // nova identidade começa com estado limpo (caso contrário, o
+  // RecoverySetupPage acha que já distribuiu e trava o botão).
+  localStorage.removeItem("arakne_recovery_distributed");
+  localStorage.removeItem("arakne_recovery_vault_id");
   return identity;
 }
 

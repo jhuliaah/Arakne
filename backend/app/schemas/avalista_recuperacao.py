@@ -14,9 +14,26 @@ bech32 ``npub1...`` (NIP-19) so the frontend can pass it directly to
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.services.bech32 import to_npub
+
+
+class VincularMentorIn(BaseModel):
+    """Corpo da requisição de POST /usuarias/me/avalistas-recuperacao.
+
+    Permite que uma usuária vincule sua convidadora/tecelã de confiança como
+    avalista de recuperação DEPOIS do cadastro (caso tenha se registrado sem
+    convite, ou a convidadora não tivesse npub na época). O vínculo é feito
+    via codigo_indicacao da mentora — mesma chave usada no onboarding.
+    """
+
+    codigo_indicacao: str = Field(
+        ...,
+        min_length=1,
+        description="Código de convite da tecelã de confiança (convidadora) "
+        "que será vinculada como avalista de recuperação.",
+    )
 
 
 class AvalistaRecuperacaoOut(BaseModel):

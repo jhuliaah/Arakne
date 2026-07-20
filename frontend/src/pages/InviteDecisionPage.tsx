@@ -14,7 +14,7 @@ export default function InviteDecisionPage({ onAceitar, onRecusar }: InviteDecis
         <h1 className="onboarding__title">Você foi convidada</h1>
         <p className="onboarding__tagline">
           Uma amiga quer te trazer para o grupo de tricô dela. Aceitar vincula
-          sua conta nova a ela — isso libera seu primeiro nível de acesso.
+          sua conta nova a ela — isso libera seu primeiro nível.
         </p>
         <div className="onboarding__form">
           <button className="btn btn--primary" onClick={onAceitar}>

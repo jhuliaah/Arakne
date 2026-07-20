@@ -10,9 +10,7 @@ Covers:
   avalistas lookup (no auth; npub is public by design)
 """
 
-import secrets
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.auth import (
@@ -24,13 +22,19 @@ from app.auth import (
 from app.database import get_db
 from app.models.aval import Aval
 from app.models.avalista_recuperacao import AvalistaRecuperacao
+from app.models.recovery_share_backup import RecoveryShareBackup
 from app.models.usuaria import Usuaria
 from app.schemas.avalista_recuperacao import (
     AvalistasRecuperacaoListResponse,
     AvalistaRecuperacaoOut,
     NpubPublicoResponse,
+    VincularMentorIn,
 )
-from app.schemas.usuaria import ConviteResponse, UsuariaCreate, UsuariaResponse
+from app.schemas.recovery_share_backup import (
+    RecoveryShareBackupIn,
+    RecoveryShareBackupOut,
+)
+from app.schemas.usuaria import ConviteResponse, NpubUpdate, UsuariaCreate, UsuariaResponse
 from app.services.lnbits import lnbits
 from app.services.risco import ao_receber_aval, pode_avalizar
 
@@ -39,48 +43,30 @@ router = APIRouter(prefix="/usuarias", tags=["usuarias"])
 
 # ── Helpers ───────────────────────────────────────────────────
 
-def _generate_shadow_npub() -> str:
-    """Generate a placeholder npub for a shadow avalista.
-
-    The backend does NOT generate real Nostr keys — that is the frontend's
-    responsibility. For shadow slots (auto-shadow strategy, T=2 N=3), we
-    generate a random 64-char hex string that the frontend will later
-    replace with a real npub when it creates the shadow wallet. The hex
-    is 32 bytes (64 hex chars), matching the size of a real Nostr pubkey.
-    """
-    return secrets.token_hex(32)
-
-
 def _create_recovery_shadows(
     db: Session,
     usuaria: Usuaria,
     referrer: Usuaria | None,
 ) -> None:
-    """Auto-create the 3 recovery avalista slots for a new usuária.
+    """Cria os slots de avalista de recuperação para uma nova usuária.
 
-    Strategy (auto-shadow, T=2 N=3):
-      - Slot 1: the convidadora's npub, if available. If the convidadora has
-        no npub (e.g. legacy usuária), slot 1 also becomes a shadow.
-      - Slots 2 and 3: always shadows (placeholder npub, nsec discarded by
-        the frontend at creation time).
+    Estratégia "Option E" (T=2, N=2):
+      - Share 0: enviado à convidadora via Nostr gift-wrap (frontend).
+        Se a convidadora tiver npub, criamos 1 slot aqui (ordem=1,
+        is_shadow=False) para que o frontend saiba para qual npub enviar
+        o gift-wrap. Se a convidadora não tiver npub, NENHUM slot é
+        criado — a dona usa o paper backup do share 0 (frontend).
+      - Share 1: criptografado com PIN pelo frontend e guardado pelo
+        backend via POST /usuarias/me/recovery-share. Não vira slot
+        de npub aqui — o backend não faz cripto Nostr.
     """
-    slots: list[tuple[int, str, bool]] = []
-
     if referrer is not None and referrer.npub:
-        slots.append((1, referrer.npub, False))
-    else:
-        slots.append((1, _generate_shadow_npub(), True))
-
-    slots.append((2, _generate_shadow_npub(), True))
-    slots.append((3, _generate_shadow_npub(), True))
-
-    for ordem, npub, is_shadow in slots:
         db.add(
             AvalistaRecuperacao(
                 usuaria_id=usuaria.id,
-                npub_avaliadora=npub,
-                ordem=ordem,
-                is_shadow=is_shadow,
+                npub_avaliadora=referrer.npub,
+                ordem=1,
+                is_shadow=False,
             )
         )
 
@@ -95,9 +81,11 @@ def _create_recovery_shadows(
     description="Cria uma conta pseudônima — só pede um PIN, nenhum dado de identidade real. "
     "Se codigo_indicacao for fornecido, cria o Aval automaticamente e libera tier 1. "
     "O npub (chave pública Nostr) é opcional e usado para recuperação social via Nostr. "
-    "No cadastro, 3 slots de avalistas de recuperação são criados automaticamente "
-    "(estratégia auto-shadow: 1 convidadora + 2 shadows, ou 3 shadows se a convidadora "
-    "não tiver npub).",
+    "No cadastro, slots de avalistas de recuperação são criados automaticamente "
+    "(estratégia Option E, T=2 N=2: 1 convidadora via Nostr + 1 share guardada pelo "
+    "backend criptografada com PIN da usuária). Se a convidadora tiver npub, cria-se "
+    "1 slot (ordem=1, is_shadow=False); se não tiver npub, nenhum slot é criado e a "
+    "dona usa paper backup para o share 0.",
 )
 def create_usuaria(
     payload: UsuariaCreate,
@@ -163,7 +151,7 @@ def create_usuaria(
         usuaria.avalista_id = referrer.id
         ao_receber_aval(usuaria)  # tier 0 → 1
 
-    # Auto-create the 3 recovery avalista slots (auto-shadow strategy)
+    # Auto-create os slots de avalista de recuperação (estratégia Option E)
     _create_recovery_shadows(db, usuaria, referrer)
 
     db.commit()
@@ -178,6 +166,44 @@ def create_usuaria(
     description="Retorna os dados da usuária autenticada. Nunca expõe pin_hash, avalista_id, ou id interno.",
 )
 def get_me(current_usuaria: Usuaria = Depends(get_current_usuaria)):
+    return current_usuaria
+
+
+@router.patch(
+    "/me/npub",
+    response_model=UsuariaResponse,
+    summary="Atualizar npub da usuária logada",
+    description="Atualiza o npub (chave pública Nostr) da usuária autenticada. "
+    "Usado pela página de setup da demo para definir o npub da Fundadora "
+    "após a geração do par nsec/npub no frontend. Valida unicidade — "
+    "rejeita se o npub já pertence a outra usuária. Permite atualizar "
+    "um npub já definido (upsert).",
+)
+def update_npub(
+    payload: NpubUpdate,
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    # Se o npub é igual ao já armazenado, retorna sem alterar (idempotente).
+    if current_usuaria.npub == payload.npub:
+        return current_usuaria
+
+    # Valida unicidade — rejeita se outra usuária já tem esse npub.
+    existing = (
+        db.query(Usuaria)
+        .filter(Usuaria.npub == payload.npub)
+        .filter(Usuaria.id != current_usuaria.id)
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="npub já cadastrado para outra usuária",
+        )
+
+    current_usuaria.npub = payload.npub
+    db.commit()
+    db.refresh(current_usuaria)
     return current_usuaria
 
 
@@ -206,10 +232,11 @@ def get_convite(
     "/me/avalistas-recuperacao",
     response_model=AvalistasRecuperacaoListResponse,
     summary="Listar avalistas de recuperação da usuária logada",
-    description="Retorna os 3 slots de avalistas de recuperação (M-of-N, T=2 N=3) "
-    "da usuária autenticada. Cada slot tem um npub e um flag is_shadow. "
-    "Usado pelo frontend para saber para quais npubs enviar pedidos NIP-17 "
-    "de recuperação de shares SSSS.",
+    description="Retorna os slots de avalistas via Nostr (T=2, N=2: 1 convidadora "
+    "+ 1 share no backend) da usuária autenticada. Cada slot tem um npub e um "
+    "flag is_shadow. Usado pelo frontend para saber para quais npubs enviar "
+    "pedidos NIP-17 de recuperação de shares SSSS. O share guardado pelo backend "
+    "não aparece aqui — ele é acessado via /usuarias/me/recovery-share.",
 )
 def get_my_avalistas_recuperacao(
     current_usuaria: Usuaria = Depends(get_current_usuaria),
@@ -224,6 +251,77 @@ def get_my_avalistas_recuperacao(
     return AvalistasRecuperacaoListResponse(
         avalistas=[AvalistaRecuperacaoOut.model_validate(a) for a in avalistas]
     )
+
+
+@router.post(
+    "/me/avalistas-recuperacao",
+    response_model=AvalistaRecuperacaoOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Vincular tecelã de confiança (avalista de recuperação) após o cadastro",
+    description="Permite que uma usuária que se cadastrou sem convidadora (ou cuja "
+    "convidadora não tinha npub na época) vincule sua tecelã de confiança como "
+    "avalista de recuperação DEPOIS do onboarding — atualizando do paper backup "
+    "para a recuperação social via Nostr. O vínculo é feito via codigo_indicacao "
+    "da mentora. Validações: a mentora existe, tem npub, não é a própria usuária "
+    "e a usuária ainda não tem nenhum slot de avalista vinculado. Cria 1 slot "
+    "(ordem=1, is_shadow=False) com o npub da mentora — mesmo padrão usado no "
+    "cadastro via _create_recovery_shadows.",
+)
+def vincular_mentor_recuperacao(
+    payload: VincularMentorIn,
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    # Rejeita se a usuária já tem algum slot de avalista de recuperação.
+    existente = (
+        db.query(AvalistaRecuperacao)
+        .filter(AvalistaRecuperacao.usuaria_id == current_usuaria.id)
+        .first()
+    )
+    if existente is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Você já tem uma tecelã de confiança vinculada.",
+        )
+
+    # Localiza a mentora pelo codigo_indicacao.
+    mentora = (
+        db.query(Usuaria)
+        .filter(Usuaria.codigo_indicacao == payload.codigo_indicacao)
+        .first()
+    )
+    if mentora is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Não encontramos essa tecelã. Confira o código.",
+        )
+
+    # A mentora não pode ser a própria usuária.
+    if mentora.id == current_usuaria.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Você não pode vincular a si mesma como tecelã de confiança.",
+        )
+
+    # A mentora precisa ter npub para receber o share via Nostr (gift-wrap).
+    if not mentora.npub:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Essa tecelã ainda não tem npub cadastrado — não é possível "
+            "vincular para recuperação via Nostr.",
+        )
+
+    # Cria o slot no mesmo padrão do _create_recovery_shadows (Option E).
+    slot = AvalistaRecuperacao(
+        usuaria_id=current_usuaria.id,
+        npub_avaliadora=mentora.npub,
+        ordem=1,
+        is_shadow=False,
+    )
+    db.add(slot)
+    db.commit()
+    db.refresh(slot)
+    return slot
 
 
 @router.get(
@@ -259,11 +357,12 @@ def get_npub_by_identificador(
     "/by-identificador/{identificador}/avalistas-recuperacao",
     response_model=AvalistasRecuperacaoListResponse,
     summary="Descobrir avalistas de recuperação de uma usuária pelo identificador",
-    description="Retorna a lista de avalistas de recuperação (npub de cada slot) "
-    "de uma usuária a partir do seu identificador. NÃO requer autenticação — "
-    "npub é público. Usado por um novo dispositivo que sabe apenas o "
-    "identificador da conta para descobrir para quais npubs enviar pedidos "
-    "NIP-17 de recuperação de shares SSSS.",
+    description="Retorna a lista de avalistas de recuperação via Nostr (T=2, N=2: "
+    "1 convidadora + 1 share no backend) de uma usuária a partir do seu "
+    "identificador. NÃO requer autenticação — npub é público. Usado por um "
+    "novo dispositivo que sabe apenas o identificador da conta para descobrir "
+    "para quais npubs enviar pedidos NIP-17 de recuperação de shares SSSS. "
+    "O share guardado pelo backend não aparece aqui.",
 )
 def get_avalistas_recuperacao_by_identificador(
     identificador: str,
@@ -288,3 +387,72 @@ def get_avalistas_recuperacao_by_identificador(
     return AvalistasRecuperacaoListResponse(
         avalistas=[AvalistaRecuperacaoOut.model_validate(a) for a in avalistas]
     )
+
+
+# ── Backup do share SSSS criptografado com PIN (Option E) ─────
+
+@router.post(
+    "/me/recovery-share",
+    response_model=RecoveryShareBackupOut,
+    summary="Armazenar (ou substituir) o share SSSS criptografado com PIN",
+    description="Armazena o share 1 de 2 (estratégia Option E, T=2 N=2) "
+    "criptografado pelo frontend com uma chave derivada do PIN da usuária "
+    "(AES-GCM). O backend recebe apenas o blob opaco em base64 — nunca vê o "
+    "PIN, nunca descriptografa e nunca participa da cripto Nostr. Como T=2, "
+    "o backend sozinho não consegue reconstruir o nsec. Se já existir um "
+    "share para a usuária, o blob é substituído (upsert).",
+)
+def upsert_recovery_share(
+    payload: RecoveryShareBackupIn,
+    response: Response,
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    existing = (
+        db.query(RecoveryShareBackup)
+        .filter(RecoveryShareBackup.usuaria_id == current_usuaria.id)
+        .first()
+    )
+
+    if existing is None:
+        backup = RecoveryShareBackup(
+            usuaria_id=current_usuaria.id,
+            encrypted_share_blob=payload.share_blob,
+        )
+        db.add(backup)
+        db.commit()
+        db.refresh(backup)
+        response.status_code = status.HTTP_201_CREATED
+        return backup
+
+    existing.encrypted_share_blob = payload.share_blob
+    db.commit()
+    db.refresh(existing)
+    return existing
+
+
+@router.get(
+    "/me/recovery-share",
+    response_model=RecoveryShareBackupOut,
+    summary="Buscar o share SSSS criptografado com PIN",
+    description="Retorna o share 1 de 2 (estratégia Option E, T=2 N=2) "
+    "criptografado com PIN, armazenado previamente via POST. O backend "
+    "retorna o blob opaco em base64 sem interpretá-lo — o frontend é "
+    "responsável por descriptografá-lo com a chave derivada do PIN. "
+    "Retorna 404 se a usuária ainda não armazenou nenhum share.",
+)
+def get_recovery_share(
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    backup = (
+        db.query(RecoveryShareBackup)
+        .filter(RecoveryShareBackup.usuaria_id == current_usuaria.id)
+        .first()
+    )
+    if backup is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nenhum share de recuperação armazenado",
+        )
+    return backup

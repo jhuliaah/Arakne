@@ -33,6 +33,9 @@
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
   --font-display: "Cinzel", Georgia, serif;
+  --font-heading: "Fraunces", Georgia, serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
 }
 
 /* ── Camada financeira (revelada) ───────────────────────────
@@ -98,13 +101,19 @@
   filter: brightness(1.12);
 }
 
+/* Wordmark (logo "Arakne") — único uso de Cinzel. */
 .theme-financial .header__name,
+.theme-financial .financial__brand-name {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+/* Títulos da camada financeira — Fraunces (voz do app). */
 .theme-financial .financial__title,
 .theme-financial .financial__tier-number,
 .theme-financial .modal__title,
-.theme-financial .repay-result__title,
-.theme-financial .financial__brand-name {
-  font-family: var(--font-display);
+.theme-financial .repay-result__title {
+  font-family: var(--font-heading);
   letter-spacing: 0.02em;
 }
 
@@ -145,14 +154,24 @@ html {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-body);
+  font-variant-numeric: tabular-nums;
   background: linear-gradient(160deg, var(--color-bg) 0%, #DCE3EE 100%);
   color: var(--color-text);
   min-height: 100vh;
   min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
   line-height: 1.5;
+}
+
+/* ── Headings ────────────────────────────────────────────── */
+/* Fraunces como voz do app: toda hierarquia de títulos e
+   elementos com classe contendo "title" ou "heading". Cinzel
+   fica reservado para o wordmark (logo "Arakne"). */
+h1, h2, h3,
+[class*="title"],
+[class*="heading"] {
+  font-family: var(--font-heading);
 }
 
 /* ── Page layout ─────────────────────────────────────────── */
@@ -2031,7 +2050,7 @@ body {
   font-weight: 700;
   color: var(--color-primary);
   margin-bottom: 0.5rem;
-  font-family: var(--font-display);
+  font-family: var(--font-heading);
   letter-spacing: 0.02em;
 }
 
@@ -2045,4 +2064,28 @@ body {
   font-size: 0.8rem;
   color: var(--color-muted);
   margin-bottom: 1.25rem;
+}
+
+/* ── RecoverAccountPage (recuperação em novo dispositivo) ──── */
+.recover__status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem 0;
+  text-align: center;
+}
+
+.recover__status-text {
+  font-size: 0.95rem;
+  color: var(--color-muted);
+  font-style: italic;
+  line-height: 1.45;
+}
+
+.recover__counter {
+  font-size: 0.85rem;
+  color: var(--color-accent);
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }

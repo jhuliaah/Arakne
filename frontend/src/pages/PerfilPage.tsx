@@ -8,6 +8,9 @@ import {
   setDisponibilidadePonto,
   logout,
 } from "../api";
+import { clearStoredIdentity } from "../lib/pattern-storage";
+import { clearSharesCache } from "../lib/recovery-respond";
+import { useDelayedFlag } from "../lib/useDelayedFlag";
 import type { Usuaria } from "../types";
 
 interface PerfilPageProps {
@@ -26,6 +29,7 @@ const NIVEL_LABELS: Record<number, string> = {
 export default function PerfilPage({ onNavigate, onLoggedOut, onVerMeuCodigo }: PerfilPageProps) {
   const [usuaria, setUsuaria] = useState<Usuaria | null>(null);
   const [loading, setLoading] = useState(true);
+  const showSkeleton = useDelayedFlag(loading);
   const [error, setError] = useState<string | null>(null);
   const [togglingPonto, setTogglingPonto] = useState(false);
   const [pontoError, setPontoError] = useState<string | null>(null);
@@ -74,6 +78,12 @@ export default function PerfilPage({ onNavigate, onLoggedOut, onVerMeuCodigo }: 
   };
 
   const handleSair = () => {
+    // Limpa identidade Nostr (nsec criptografado, hash do padrão, npub) E
+    // os dados de sessão do backend (token, identificador, etc.). Também
+    // limpa o cache em memória das shares recebidas como avalista (evita
+    // que um próximo login na mesma aba responda pedidos com shares velhas).
+    clearStoredIdentity();
+    clearSharesCache();
     logout();
     onLoggedOut();
   };
@@ -85,7 +95,47 @@ export default function PerfilPage({ onNavigate, onLoggedOut, onVerMeuCodigo }: 
         <h2 className="catalog__title">Bancada de Trabalho</h2>
         <p className="catalog__subtitle">{nickname ? `Olá, ${nickname}` : "Sua bancada"}</p>
 
-        {loading && <p className="field__hint">Carregando...</p>}
+        {/* Sair da conta — sempre visível no topo, independente do backend */}
+        {!confirmandoSaida ? (
+          <button
+            className="btn btn--secondary"
+            onClick={() => setConfirmandoSaida(true)}
+            style={{ marginBottom: "1.5rem" }}
+          >
+            Sair da conta
+          </button>
+        ) : (
+          <div className="consent-note" style={{ marginBottom: "1.5rem" }}>
+            <p style={{ marginBottom: "0.75rem" }}>
+              Isso limpa este aparelho. Você só volta a entrar desenhando
+              seu Ponto Arakne (ou usando suas palavras do ateliê num
+              aparelho novo). Tem certeza?
+            </p>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button className="btn btn--secondary" onClick={() => setConfirmandoSaida(false)}>
+                Cancelar
+              </button>
+              <button className="btn btn--primary" onClick={handleSair}>
+                Sair mesmo assim
+              </button>
+            </div>
+          </div>
+        )}
+
+        {loading && showSkeleton && (
+          <div className="trilhas__grid" aria-hidden="true">
+            {[1, 2, 3].map((i) => (
+              <div className="skeleton-card" key={i}>
+                <div className="skeleton skeleton-card__visual" />
+                <div className="skeleton-card__body">
+                  <div className="skeleton skeleton--text" />
+                  <div className="skeleton skeleton--text skeleton--short" />
+                  <div className="skeleton skeleton--bar" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         {error && <p className="field__error">{error}</p>}
 
         {usuaria && (
@@ -104,8 +154,8 @@ export default function PerfilPage({ onNavigate, onLoggedOut, onVerMeuCodigo }: 
 
             {usuaria.tier_congelado && (
               <div className="consent-note" style={{ marginBottom: "0.875rem" }}>
-                Seu nível está pausado no momento — alguém que você avalizou
-                ainda não devolveu o fio dela.
+                Padrão esperando você voltar — uma parceira de fio sua ainda
+                não terminou o padrão dela.
               </div>
             )}
 
@@ -133,29 +183,6 @@ export default function PerfilPage({ onNavigate, onLoggedOut, onVerMeuCodigo }: 
             </button>
           </>
         )}
-
-        <div style={{ marginTop: "2rem" }}>
-          {!confirmandoSaida ? (
-            <button className="btn btn--secondary" onClick={() => setConfirmandoSaida(true)}>
-              Sair da conta
-            </button>
-          ) : (
-            <div className="consent-note">
-              <p style={{ marginBottom: "0.75rem" }}>
-                Isso limpa este aparelho. Você só volta a entrar com sua chave
-                de segurança. Tem certeza?
-              </p>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button className="btn btn--secondary" onClick={() => setConfirmandoSaida(false)}>
-                  Cancelar
-                </button>
-                <button className="btn btn--primary" onClick={handleSair}>
-                  Sair mesmo assim
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
       </main>
       <BottomNav active="perfil" onNavigate={onNavigate} />
     </div>

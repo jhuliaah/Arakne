@@ -1,26 +1,25 @@
-/** Identidade Nostr no dispositivo — NIP-06 (derivação por mnemônico) + NIP-19 (bech32).
+/** Identidade Nostr no dispositivo — geração direta de nsec + NIP-19 (bech32).
  *
  *  Tudo aqui é 100% local: a chave privada (nsec) NUNCA sai do dispositivo,
  *  nunca é enviada ao backend, nunca é persistida por este módulo. O chamador
  *  decide onde (e se) guarda o nsec — recomendamos encrypt/decrypt antes de
- *  qualquer persistência (Phase 2).
+ *  qualquer persistência.
  *
- *  NIP-06: derivação de chave Nostr a partir de mnemônico BIP-39 via BIP-32,
- *  path m/44'/1237'/0'/0/0 (o nostr-tools cuida do path internamente).
+ *  O nsec é gerado diretamente com `generateSecretKey()` (32 bytes aleatórios
+ *  via `nostr-tools/pure`). Não usamos mais NIP-06 (derivação por mnemônico
+ *  BIP-39) — o protocolo Nostr marca o NIP-06 como `unrecommended` e o novo
+ *  modelo de recuperação do Arakne (social via NIP-17/59 + SSSS) não depende
+ *  de mnemonic. O npub passa a ser o identificador de backup anotado em
+ *  QR/papel — muito mais curto que 12 palavras.
+ *
  *  NIP-19: codificação bech32 (nsec1... / npub1...).
  */
 
-import {
-  generateSeedWords,
-  accountFromSeedWords,
-  validateWords,
-} from "nostr-tools/nip06";
+import { generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import * as nip19 from "nostr-tools/nip19";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 
 export interface NostrIdentity {
-  /** Mnemônico BIP-39 (12 palavras). */
-  mnemonic: string;
   /** Chave privada bech32 (nsec1...). NUNCA enviar ao backend. */
   nsec: string;
   /** Chave pública bech32 (npub1...). Pode ser compartilhada. */
@@ -31,53 +30,20 @@ export interface NostrIdentity {
   publicKeyHex: string;
 }
 
-/** Índice de conta padrão do path NIP-06 (m/44'/1237'/0'/0/<accountIndex>). */
-const DEFAULT_ACCOUNT_INDEX = 0;
-
-/** passphrase BIP-39 vazia por padrão (a usuária pode passar uma se quiser). */
-const DEFAULT_PASSPHRASE = "";
-
-function buildIdentity(
-  mnemonic: string,
-  passphrase: string,
-  accountIndex: number,
-): NostrIdentity {
-  const { privateKey, publicKey } = accountFromSeedWords(
-    mnemonic,
-    passphrase,
-    accountIndex,
-  );
+/** Gera uma nova identidade Nostr: nsec direto (32 bytes aleatórios) + npub.
+ *
+ *  Não há mais derivação por mnemonic — o nsec é a própria chave mestra.
+ *  Para backup, anote o npub (público, curto) e use recuperação social
+ *  (NIP-17/59 + SSSS) distribuída a avalistas.
+ */
+export function createNostrIdentity(): NostrIdentity {
+  const privateKey = generateSecretKey(); // Uint8Array de 32 bytes
+  const publicKey = getPublicKey(privateKey); // hex string (64 chars)
   const privateKeyHex = bytesToHex(privateKey);
-  // publicKey já vem em hex no nostr-tools (32 bytes / 64 chars).
   const publicKeyHex = publicKey;
   const nsec = nip19.nsecEncode(privateKey);
   const npub = nip19.npubEncode(publicKeyHex);
-  return { mnemonic, nsec, npub, privateKeyHex, publicKeyHex };
-}
-
-/** Gera uma nova identidade Nostr: mnemônico → nsec/npub via NIP-06. */
-export function createNostrIdentity(): NostrIdentity {
-  const mnemonic = generateSeedWords();
-  return buildIdentity(mnemonic, DEFAULT_PASSPHRASE, DEFAULT_ACCOUNT_INDEX);
-}
-
-/** Restaura identidade a partir de mnemônico existente.
- *
- *  Lança se o mnemônico for inválido (use validateMnemonic antes).
- *  Passar `passphrase` habilita seeds protegidas por senha BIP-39.
- */
-export function restoreFromMnemonic(
-  mnemonic: string,
-  passphrase?: string,
-): NostrIdentity {
-  if (!validateWords(mnemonic)) {
-    throw new Error("Mnemônico inválido (BIP-39).");
-  }
-  return buildIdentity(
-    mnemonic,
-    passphrase ?? DEFAULT_PASSPHRASE,
-    DEFAULT_ACCOUNT_INDEX,
-  );
+  return { nsec, npub, privateKeyHex, publicKeyHex };
 }
 
 /** Decodifica nsec1... → bytes da chave privada (32 bytes). */
@@ -101,11 +67,6 @@ export function decodeNpub(npub: string): string {
     throw new Error(`Esperado npub1..., recebido ${decoded.type}.`);
   }
   return decoded.data;
-}
-
-/** Valida mnemônico BIP-39 (palavras + checksum). */
-export function validateMnemonic(mnemonic: string): boolean {
-  return validateWords(mnemonic);
 }
 
 // Re-export utilitário para callers que precisem converter hex ↔ bytes

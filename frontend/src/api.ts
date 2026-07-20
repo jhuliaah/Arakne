@@ -164,6 +164,26 @@ export async function getMe(token: string): Promise<Usuaria | null> {
   }
 }
 
+/** Atualiza o npub da usuária logada via PATCH /usuarias/me/npub.
+ *  Usado pela página de setup da demo para definir o npub da Fundadora
+ *  após a geração do par nsec/npub no frontend. */
+export async function updateNpub(token: string, npub: string): Promise<Usuaria | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/usuarias/me/npub`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ npub }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function createEmprestimo(identificador: string): Promise<Emprestimo | null> {
   try {
     const resp = await fetch(`${API_BASE}/emprestimos/${identificador}`, {
@@ -319,7 +339,104 @@ export async function getAvalistasRecuperacao(
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!resp.ok) return null;
-    return await resp.json();
+    const data = (await resp.json()) as { avalistas: AvalistaRecuperacao[] };
+    return data.avalistas;
+  } catch {
+    return null;
+  }
+}
+
+// ── Recuperação em novo dispositivo (sem auth, por identificador) ──
+
+/** Armazena a share 1 (criptografada com PIN) no backend.
+ *  Endpoint: POST /usuarias/me/recovery-share (auth required).
+ *  Opção E: T=2 N=2 — o backend guarda 1 share, a convidadora guarda a outra.
+ *  @returns true se o backend aceitou (201/200), false caso contrário. */
+export async function uploadRecoveryShare(shareBlob: string): Promise<boolean> {
+  try {
+    const token = await ensureToken();
+    if (!token) return false;
+    const resp = await fetch(`${API_BASE}/usuarias/me/recovery-share`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ share_blob: shareBlob }),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Busca a share 1 (criptografada com PIN) do backend.
+ *  Endpoint: GET /usuarias/me/recovery-share (auth required).
+ *  Retorna o blob base64, ou null se não houver share armazenada (404) ou falhar. */
+export async function fetchRecoveryShare(): Promise<string | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/usuarias/me/recovery-share`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (resp.status === 404) return null;
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { share_blob: string };
+    return data.share_blob;
+  } catch {
+    return null;
+  }
+}
+
+/** Busca o npub público de uma usuária pelo identificador (sem auth).
+ *
+ *  Usado por um novo dispositivo que sabe apenas o identificador da conta
+ *  para descobrir o npub da dona e iniciar a recuperação social (Track 4A).
+ *  O npub é público por design (chave pública Nostr) — não requer token.
+ *
+ *  Endpoint: GET /usuarias/by-identificador/{id}/npub
+ *  Resposta: { identificador: string, npub: string | null }
+ *
+ *  @param identificador - identificador opaco da conta da dona
+ *  @returns npub bech32 (npub1...), ou null se não encontrado/erro de rede */
+export async function getNpubByIdentificador(
+  identificador: string,
+): Promise<string | null> {
+  try {
+    const resp = await fetch(
+      `${API_BASE}/usuarias/by-identificador/${encodeURIComponent(identificador)}/npub`,
+    );
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { identificador: string; npub: string | null };
+    return data.npub;
+  } catch {
+    return null;
+  }
+}
+
+/** Busca os avalistas de recuperação de uma usuária pelo identificador (sem auth).
+ *
+ *  Usado por um novo dispositivo para descobrir para quais npubs enviar os
+ *  pedidos NIP-59 de recuperação de shares SSSS (Track 4A). Não requer token
+ *  — npub é público.
+ *
+ *  Endpoint: GET /usuarias/by-identificador/{id}/avalistas-recuperacao
+ *  Resposta: { avalistas: AvalistaRecuperacao[] }
+ *
+ *  @param identificador - identificador opaco da conta da dona
+ *  @returns array de avalistas (com npub_avaliadora em bech32), ou null se
+ *    não encontrado/erro de rede */
+export async function getAvalistasByIdentificador(
+  identificador: string,
+): Promise<AvalistaRecuperacao[] | null> {
+  try {
+    const resp = await fetch(
+      `${API_BASE}/usuarias/by-identificador/${encodeURIComponent(identificador)}/avalistas-recuperacao`,
+    );
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { avalistas: AvalistaRecuperacao[] };
+    return data.avalistas;
   } catch {
     return null;
   }
@@ -420,7 +537,12 @@ export async function listarTrilhas(tecnica?: string, estilo?: string): Promise<
     if (tecnica) params.set("tecnica", tecnica);
     if (estilo) params.set("estilo", estilo);
     const qs = params.toString();
-    const resp = await fetch(`${API_BASE}/trilhas${qs ? "?" + qs : ""}`);
+    // Envia o token (se houver) para que o backend retorne o progresso
+    // da usuária logada — sem token, `aulas_concluidas` vem sempre 0.
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const resp = await fetch(`${API_BASE}/trilhas${qs ? "?" + qs : ""}`, { headers });
     if (!resp.ok) return null;
     return await resp.json();
   } catch {
@@ -430,7 +552,15 @@ export async function listarTrilhas(tecnica?: string, estilo?: string): Promise<
 
 export async function getTrilha(id: number): Promise<TrilhaDetail | null> {
   try {
-    const resp = await fetch(`${API_BASE}/trilhas/${id}`);
+    // Envia o token (se houver) para que o backend retorne o progresso
+    // da usuária logada (aulas concluídas + níveis desbloqueados). Sem
+    // token, o backend trata como anônima e tudo aparece como não
+    // concluído/trancado — o progresso salvo via `concluirAula` ficaria
+    // invisível ao voltar para a TrilhaDetailPage.
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const resp = await fetch(`${API_BASE}/trilhas/${id}`, { headers });
     if (!resp.ok) return null;
     return await resp.json();
   } catch {
