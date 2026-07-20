@@ -29,6 +29,17 @@ def mock_lnbits():
     lnbits._mock = True
 
 
+@pytest.fixture(autouse=True)
+def mock_pix():
+    """Ensure the Pix (Mercado Pago) client is in mock mode for all tests
+    (no real PSP call), same pattern as mock_lnbits above."""
+    from app.services.pix import pix
+
+    pix._mock = True
+    yield
+    pix._mock = True
+
+
 @pytest.fixture
 def db_session():
     """Create a fresh in-memory database for each test."""
