@@ -9,8 +9,8 @@
   HexPatternCanvas:
    - se já há identidade Nostr armazenada → mode="login" → destravar com
      o desenho → revela FinancialPage (transição arakne-reveal);
-   - se não → mode="register" → cria identidade Nostr → vai ao backup
-     (mostra o mnemonic) e depois ao catálogo.
+    - se não → mode="register" → cria identidade Nostr → vai à
+      configuração de recuperação (RecoverySetupPage) e depois ao catálogo.
 
   As demais aulas da trilha #9 mostram conteúdo normal (placeholder do
   seed), como qualquer outra trilha.
@@ -21,7 +21,15 @@ import Header from "../components/Header";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
 import HexPatternCanvas from "../components/HexPatternCanvas";
 import { concluirAula, generatePin, criarConta, markUnlockedThisSession } from "../api";
-import { hasStoredIdentity, createAndStoreIdentity, unlockWithPattern } from "../lib/pattern-storage";
+import {
+  hasStoredIdentity,
+  createAndStoreIdentity,
+  unlockWithPattern,
+  incrementFailedAttempts,
+  resetFailedAttempts,
+  isLockedOut,
+  MAX_ATTEMPTS,
+} from "../lib/pattern-storage";
 import type { Aula } from "../types";
 
 interface AulaPageProps {
@@ -31,8 +39,10 @@ interface AulaPageProps {
   onNavigate: (target: NavTarget) => void;
   /** Trilha #9 aula 1 nível 1 destravada → revela a camada financeira. */
   onRevealFinancial: () => void;
-  /** Trilha #9 aula 1 nível 1 sem conta → cria identidade e vai ao backup. */
-  onGoToBackup: (mnemonic: string) => void;
+  /** Trilha #9 aula 1 nível 1 sem conta → cria identidade e vai à configuração de recuperação.
+   *  Recebe o PIN gerado em criarConta (Opção E: usado para criptografar
+   *  a share 1 antes de enviar ao backend). */
+  onGoToRecoverySetup: (npub: string, nsec: string, pin: string) => void;
 }
 
 /** Detecta a "aula portal": aula 1 do nível 1 da trilha #9 (Ponto Arakne). */
@@ -46,7 +56,7 @@ export default function AulaPage({
   onConcluida,
   onNavigate,
   onRevealFinancial,
-  onGoToBackup,
+  onGoToRecoverySetup,
 }: AulaPageProps) {
   const [concluida, setConcluida] = useState(aula.concluida);
   const [submitting, setSubmitting] = useState(false);
@@ -61,6 +71,10 @@ export default function AulaPage({
   if (isPortalAula(aula)) {
     const hasIdentity = hasStoredIdentity();
     const mode = hasIdentity ? "login" : "register";
+    // §5.2: se a dona errou o Ponto Arakne MAX_ATTEMPTS vezes (as pernas
+    // da aranha), o Ponto trava — deixa de funcionar como credencial.
+    // A UI disfarçada mostra um ponto genérico, sem indício de credencial.
+    const lockedOut = hasIdentity && isLockedOut();
 
     async function handlePortalPattern(pattern: number[]) {
       setPatternLoading(true);
@@ -69,9 +83,19 @@ export default function AulaPage({
         const identity = await unlockWithPattern(pattern);
         setPatternLoading(false);
         if (identity) {
+          // Sucesso: zera o contador de tentativas falhas antes de revelar.
+          resetFailedAttempts();
           markUnlockedThisSession();
           onRevealFinancial();
         } else {
+          // Falha: incrementa o contador. Se atingiu o limite, o Ponto
+          // trava — a UI passa a exibir o estado de lockout disfarçado.
+          const attempts = incrementFailedAttempts();
+          if (attempts >= MAX_ATTEMPTS) {
+            setPatternError(false);
+            setPatternResetKey((k) => k + 1);
+            return;
+          }
           setPatternError(true);
           window.setTimeout(() => {
             setPatternError(false);
@@ -79,19 +103,85 @@ export default function AulaPage({
           }, 650);
         }
       } else {
-        // Registro: cria identidade Nostr + conta backend, vai ao backup.
+        // Registro: cria identidade Nostr + conta backend, vai à recuperação.
         try {
           const id = await createAndStoreIdentity(pattern);
-          // Conta backend com PIN aleatório interno (usuária não vê).
-          await criarConta(generatePin());
+          // Conta backend com PIN aleatório interno. O PIN é passado à
+          // RecoverySetupPage para criptografar a share 1 (Opção E) e
+          // mostrado à dona como "código de reserva" para anotar.
+          const pin = generatePin();
+          await criarConta(pin);
+          // Nova identidade começa com contador de tentativas zerado.
+          resetFailedAttempts();
           setPatternLoading(false);
-          onGoToBackup(id.mnemonic);
+          onGoToRecoverySetup(id.npub, id.nsec, pin);
         } catch {
           setPatternLoading(false);
           setErro("Algo deu errado ao guardar seu desenho. Tente novamente.");
           setPatternResetKey((k) => k + 1);
         }
       }
+    }
+
+    // ── Estado de lockout (§5.2): ponto "indisponível", sem credencial ──
+    // Disfarce mantida: parece um ponto de crochê genérico temporariamente
+    // indisponível. Nenhuma linguagem de segurança/credencial/recuperação.
+    if (lockedOut) {
+      return (
+        <div className="page">
+          <Header />
+          <main className="catalog">
+            <button className="financial__back" onClick={onBack} aria-label="Voltar">
+              ← Voltar
+            </button>
+
+            <div className="aula__header">
+              <h2 className="aula__title">{aula.titulo}</h2>
+              <p className="aula__desc">
+                Este ponto requer prática adicional. Explore outras trilhas enquanto isso.
+              </p>
+            </div>
+
+            {/* Ponto de crochê genérico — visual estático, não interativo.
+                Parece um padrão normal, mas sem canvas de desenho. */}
+            <div
+              style={{
+                width: "100%",
+                maxWidth: "480px",
+                margin: "0 auto",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "1rem",
+                padding: "1.5rem 0",
+              }}
+              aria-label="Ponto de crochê indisponível"
+            >
+              <div
+                style={{
+                  width: "220px",
+                  height: "220px",
+                  borderRadius: "50%",
+                  background:
+                    "radial-gradient(circle at 50% 40%, #f5efe6 0%, #ece3d4 60%, #ddd1bd 100%)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                }}
+              >
+                <span style={{ fontSize: "3rem", lineHeight: 1 }} aria-hidden="true">
+                  🧶
+                </span>
+              </div>
+              <p className="field__hint" style={{ textAlign: "center" }}>
+                Este ponto está temporariamente indisponível. Tente outra aula.
+              </p>
+            </div>
+          </main>
+          <BottomNav active="catalog" onNavigate={onNavigate} />
+        </div>
+      );
     }
 
     return (
