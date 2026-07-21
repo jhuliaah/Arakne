@@ -1,7 +1,8 @@
  /** Tela do ateliê — painel da artesã depois de entrar com o código. */
 
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import QRCode from "qrcode";
 import Header from "../components/Header";
 import RecoveryBellHost from "../components/RecoveryBellHost";
 import {
@@ -22,10 +23,14 @@ import {
   recusarTroca,
   getAvalistasRecuperacao,
   vincularMentorRecuperacao,
+  criarCobrancaPix,
+  getStatusPagamentoPix,
+  satsParaCentavosBrl,
+  SATS_TO_BRL,
 } from "../api";
 import type { ConviteResponse } from "../api";
 import type { AvalistaRecuperacao } from "../api";
-import type { Emprestimo, PontoDeTroca, Troca, Usuaria } from "../types";
+import type { CobrancaPix, Emprestimo, PontoDeTroca, Troca, Usuaria } from "../types";
 import { useDelayedFlag } from "../lib/useDelayedFlag";
 import MeuCodigoQR from "../components/MeuCodigoQR";
 
@@ -61,6 +66,91 @@ function truncarNpub(npub: string): string {
  *  para npub truncado quando o apelido não existe. */
 function rotuloTecela(tec: AvalistaRecuperacao): string {
   return tec.apelido?.trim() || truncarNpub(tec.npub_avaliadora);
+}
+
+/** Formatador de moeda BRL reutilizado no modal de devolução. */
+const brlFormatter = new Intl.NumberFormat("pt-BR", {
+  style: "currency",
+  currency: "BRL",
+});
+
+/** Modos do modal de devolução. Controla qual tela está visível:
+ *  - "input": escolha de valor + botões Lightning/Pix
+ *  - "pix-loading": gerando cobrança Pix
+ *  - "pix-awaiting": QR visível, polling de status ativo
+ *  - "pix-confirmed": pagamento aprovado, fecha em 2s
+ *  - "pix-error": falha/expirado, botão "Tentar novamente" */
+type RepayMode = "input" | "pix-loading" | "pix-awaiting" | "pix-confirmed" | "pix-error";
+
+/** QR de devolução via Pix. Reusa a lib `qrcode` (mesmo padrão do
+ *  MeuCodigoQR). Prefere o `qr_code_base64` que vem do backend; se vier
+ *  vazio (caso mock), gera o QR a partir da linha `qr_code` (copia-e-cola).
+ *  Disfarce: o alt text fala em "código de devolução", não em Pix. */
+function PixQR({ cobranca }: { cobranca: CobrancaPix }) {
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (cobranca.qr_code_base64) {
+      const b64 = cobranca.qr_code_base64;
+      // O backend (Mercado Pago) devolve data URL completo; em mock
+      // pode vir só o base64 cru — cobrimos os dois.
+      setDataUrl(b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`);
+      setError(null);
+      return;
+    }
+    if (!cobranca.qr_code) {
+      setError("Não foi possível gerar o código de devolução.");
+      setDataUrl(null);
+      return;
+    }
+    let cancelled = false;
+    QRCode.toDataURL(cobranca.qr_code, {
+      width: 240,
+      margin: 1,
+      color: { dark: "#12294F", light: "#F3ECDD" },
+    })
+      .then((url) => {
+        if (!cancelled) {
+          setDataUrl(url);
+          setError(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError("Não foi possível gerar o código de devolução.");
+      });
+    return () => { cancelled = true; };
+  }, [cobranca.qr_code_base64, cobranca.qr_code]);
+
+  if (error) {
+    return <p className="field__error">{error}</p>;
+  }
+
+  if (!dataUrl) {
+    return (
+      <div
+        className="skeleton skeleton-card__visual"
+        style={{ width: 240, height: 240, margin: "0 auto" }}
+        aria-hidden="true"
+      />
+    );
+  }
+
+  return (
+    <div style={{ textAlign: "center" }}>
+      <div
+        style={{
+          display: "inline-block",
+          background: "#F3ECDD",
+          padding: "12px",
+          borderRadius: "14px",
+          boxShadow: "var(--shadow-lg)",
+        }}
+      >
+        <img src={dataUrl} alt="Código de devolução" width={240} height={240} />
+      </div>
+    </div>
+  );
 }
 
 export default function FinancialPage({
@@ -104,13 +194,49 @@ export default function FinancialPage({
   const [tecelaSuccess, setTecelaSuccess] = useState<string | null>(null);
 
   // Repayment modal state
+  // `mode` controla qual tela do modal está visível:
+  //  - "input": escolha de valor + botões Lightning/Pix
+  //  - "pix-loading": gerando cobrança Pix
+  //  - "pix-awaiting": QR visível, polling de status ativo
+  //  - "pix-confirmed": pagamento aprovado, fecha em 2s
+  //  - "pix-error": falha/expirado, botão "Tentar novamente"
   const [repayModal, setRepayModal] = useState<{
     open: boolean;
     emprestimo: Emprestimo | null;
     valor: string;
     processing: boolean;
     result: { quitado: boolean; tier: number; saldo_devedor: number } | null;
-  }>({ open: false, emprestimo: null, valor: "", processing: false, result: null });
+    mode: RepayMode;
+    pixCobranca: CobrancaPix | null;
+    pixError: string | null;
+  }>({
+    open: false,
+    emprestimo: null,
+    valor: "",
+    processing: false,
+    result: null,
+    mode: "input",
+    pixCobranca: null,
+    pixError: null,
+  });
+
+  // Ref para o interval de polling Pix — limpo no unmount e ao fechar
+  // o modal. NUNCA deixar polling rodando após desmontar.
+  const pixPollingRef = useRef<number | null>(null);
+
+  /** Para o polling de status Pix, se ativo. Idempotente. */
+  const stopPixPolling = useCallback(() => {
+    if (pixPollingRef.current !== null) {
+      clearInterval(pixPollingRef.current);
+      pixPollingRef.current = null;
+    }
+  }, []);
+
+  // Cleanup de segurança: se o componente desmontar com polling ativo
+  // (ex.: navegação para outra tela), limpa o interval.
+  useEffect(() => {
+    return () => stopPixPolling();
+  }, [stopPixPolling]);
 
   // Confirmação de "Puxar novelos" (substitui a exibição da invoice)
   const [liberadoDisplay, setLiberadoDisplay] = useState<Emprestimo | null>(null);
@@ -398,11 +524,24 @@ export default function FinancialPage({
       valor: String(emp.valor_sats),
       processing: false,
       result: null,
+      mode: "input",
+      pixCobranca: null,
+      pixError: null,
     });
   };
 
   const closeRepayModal = () => {
-    setRepayModal({ open: false, emprestimo: null, valor: "", processing: false, result: null });
+    stopPixPolling();
+    setRepayModal({
+      open: false,
+      emprestimo: null,
+      valor: "",
+      processing: false,
+      result: null,
+      mode: "input",
+      pixCobranca: null,
+      pixError: null,
+    });
   };
 
   const handleRepay = async () => {
@@ -444,6 +583,68 @@ export default function FinancialPage({
       );
       closeRepayModal();
     }
+  };
+
+  // ── Repayment via Pix ─────────────────────────────────────────
+  // Fluxo paralelo ao Lightning: gera cobrança Pix, mostra QR e faz
+  // polling de status a cada 3s. Disfarce: "código de devolução".
+
+  const handleRepayPix = async () => {
+    const emp = repayModal.emprestimo;
+    if (!emp) return;
+    const valor = parseInt(repayModal.valor, 10);
+    if (!valor || valor <= 0) return;
+
+    // Garante que não há polling anterior rodando
+    stopPixPolling();
+
+    setRepayModal((prev) => ({
+      ...prev,
+      mode: "pix-loading",
+      pixError: null,
+      pixCobranca: null,
+    }));
+
+    const centavos = satsParaCentavosBrl(valor);
+    const cobranca = await criarCobrancaPix(emp.id, valor, centavos);
+
+    if (!cobranca) {
+      setRepayModal((prev) => ({
+        ...prev,
+        mode: "pix-error",
+        pixError: "Não conseguimos gerar o código de devolução agora. Tente de novo.",
+      }));
+      return;
+    }
+
+    setRepayModal((prev) => ({
+      ...prev,
+      mode: "pix-awaiting",
+      pixCobranca: cobranca,
+    }));
+
+    // Inicia polling de status a cada 3s
+    pixPollingRef.current = window.setInterval(async () => {
+      const status = await getStatusPagamentoPix(cobranca.txid);
+      if (!status) return; // erro de rede → mantém polling
+      if (status.status === "aprovado") {
+        stopPixPolling();
+        setRepayModal((prev) => ({ ...prev, mode: "pix-confirmed" }));
+        // Refresca saldo/tier e fecha o modal após 2s
+        setTimeout(async () => {
+          await loadData();
+          closeRepayModal();
+        }, 2000);
+      } else if (status.status === "expirado") {
+        stopPixPolling();
+        setRepayModal((prev) => ({
+          ...prev,
+          mode: "pix-error",
+          pixError: "O código de devolução expirou. Tente gerar um novo.",
+        }));
+      }
+      // status === "pendente" → mantém polling
+    }, 3000);
   };
 
   // ── Confirmação "Puxar novelos" ─────────────────────────────
@@ -888,7 +1089,7 @@ export default function FinancialPage({
         <div className="modal-overlay" onClick={closeRepayModal}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             {repayModal.result ? (
-              // ── Result view ──
+              // ── Lightning result view (fluxo existente) ──
               <div className="repay-result">
                 <div className="repay-result__icon">
                   {repayModal.result.quitado ? "🎉" : "✅"}
@@ -902,8 +1103,111 @@ export default function FinancialPage({
                     : `Faltam ${repayModal.result.saldo_devedor.toLocaleString("pt-BR")} novelo(s) pra terminar esse padrão.`}
                 </p>
               </div>
+            ) : repayModal.mode === "pix-loading" ? (
+              // ── Pix loading: gerando cobrança ──
+              <>
+                <h3 className="modal__title">Devolver via Pix</h3>
+                <p className="modal__text">Gerando código de devolução…</p>
+                <div
+                  className="skeleton skeleton-card__visual"
+                  style={{ width: 240, height: 240, margin: "0 auto" }}
+                  aria-hidden="true"
+                />
+              </>
+            ) : repayModal.mode === "pix-awaiting" && repayModal.pixCobranca ? (
+              // ── Pix awaiting: QR visível + polling ativo ──
+              <>
+                <h3 className="modal__title">Devolver via Pix</h3>
+                <p className="modal__text">
+                  Escaneie o código de devolução para concluir.
+                </p>
+
+                <PixQR cobranca={repayModal.pixCobranca} />
+
+                <p
+                  className="modal__hint"
+                  style={{ textAlign: "center", marginTop: "0.75rem", fontWeight: 600 }}
+                >
+                  {brlFormatter.format(repayModal.pixCobranca.valor_centavos_brl / 100)}
+                </p>
+
+                <p className="modal__hint" style={{ textAlign: "center" }}>
+                  Aguardando pagamento…
+                </p>
+
+                {/* Copia-e-cola opcional — disfarçado como "código de
+                    devolução". Nunca mostramos txid/mp_payment_id crus. */}
+                <div className="financial__invite-link" style={{ marginTop: "0.75rem" }}>
+                  <input
+                    type="text"
+                    readOnly
+                    value={repayModal.pixCobranca.qr_code}
+                    className="financial__invite-input"
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                    aria-label="Código de devolução para copiar"
+                  />
+                  <button
+                    className="financial__btn financial__btn--small"
+                    onClick={() => {
+                      navigator.clipboard.writeText(repayModal.pixCobranca!.qr_code);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                  >
+                    {copied ? "Copiado!" : "Copiar"}
+                  </button>
+                </div>
+
+                <div className="modal__actions" style={{ marginTop: "0.75rem" }}>
+                  <button
+                    className="financial__btn financial__btn--secondary"
+                    onClick={closeRepayModal}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </>
+            ) : repayModal.mode === "pix-confirmed" ? (
+              // ── Pix confirmed: fecha automaticamente em 2s ──
+              <div className="repay-result">
+                <div className="repay-result__icon">✅</div>
+                <h3 className="repay-result__title">Pagamento confirmado!</h3>
+                <p className="repay-result__text">
+                  Novelos devolvidos. Seu ateliê já está atualizado.
+                </p>
+              </div>
+            ) : repayModal.mode === "pix-error" ? (
+              // ── Pix error: mensagem + "Tentar novamente" ──
+              <div className="repay-result">
+                <div className="repay-result__icon">⚠️</div>
+                <h3 className="repay-result__title">Não foi possível concluir</h3>
+                <p className="repay-result__text">
+                  {repayModal.pixError ?? "Algo deu errado. Tente de novo."}
+                </p>
+                <div className="modal__actions" style={{ marginTop: "0.75rem" }}>
+                  <button
+                    className="financial__btn financial__btn--secondary"
+                    onClick={closeRepayModal}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    className="financial__btn financial__btn--primary financial__btn--small"
+                    onClick={() =>
+                      setRepayModal((prev) => ({
+                        ...prev,
+                        mode: "input",
+                        pixError: null,
+                        pixCobranca: null,
+                      }))
+                    }
+                  >
+                    Tentar novamente
+                  </button>
+                </div>
+              </div>
             ) : (
-              // ── Input view ──
+              // ── Input view (default, mode === "input") ──
               <>
                 <h3 className="modal__title">Devolver novelos</h3>
                 <p className="modal__text">
@@ -930,6 +1234,15 @@ export default function FinancialPage({
                   placeholder="Quantos novelos"
                   autoFocus
                 />
+
+                {/* Conversão sats → BRL ao vivo, para a usuária saber
+                    quanto está devolvendo em dinheiro bancário via Pix. */}
+                {repayModal.valor && parseInt(repayModal.valor, 10) > 0 && (
+                  <p className="modal__hint">
+                    {parseInt(repayModal.valor, 10).toLocaleString("pt-BR")} sats ≈{" "}
+                    {brlFormatter.format(parseInt(repayModal.valor, 10) * SATS_TO_BRL)}
+                  </p>
+                )}
 
                 <div className="modal__quick-buttons">
                   <button
@@ -965,9 +1278,21 @@ export default function FinancialPage({
                     onClick={handleRepay}
                     disabled={repayModal.processing || !repayModal.valor || parseInt(repayModal.valor, 10) <= 0}
                   >
-                    {repayModal.processing ? "Processando..." : "Confirmar devolução"}
+                    {repayModal.processing ? "Processando..." : "Devolver novelos"}
                   </button>
                 </div>
+
+                {/* Pix — ação secundária, abaixo do fluxo Lightning
+                    principal. Disfarce: "Pagar com Pix" em texto normal,
+                    sem gritar. Mesmas classes CSS do resto do modal. */}
+                <button
+                  className="financial__btn financial__btn--small financial__btn--secondary"
+                  style={{ width: "100%", marginTop: "0.5rem" }}
+                  onClick={handleRepayPix}
+                  disabled={repayModal.processing || !repayModal.valor || parseInt(repayModal.valor, 10) <= 0}
+                >
+                  Pagar com Pix
+                </button>
               </>
             )}
           </div>
