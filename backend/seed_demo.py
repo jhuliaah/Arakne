@@ -3,6 +3,7 @@
 
 Reseta o banco SQLite e cria:
 - A Usuária Fundadora (tier 3, acesso total, pode convidar outras)
+- A Usuária Fornecedora (segundo perfil mestre, tier 3, pode convidar)
 - As 9 trilhas de aprendizagem (8 técnicas + 1 Ponto Arakne placeholder),
   cada uma com 3 níveis × 2 aulas × 2-3 materiais.
 
@@ -10,8 +11,8 @@ Uso:
     cd backend
     python seed_demo.py
 
-A Fundadora nasce sem npub (None) — a página /demo-setup do frontend
-gera o par nsec/npub e atualiza o npub via PATCH /usuarias/me/npub.
+A Fundadora e a Fornecedora nascem sem npub (None) — a página /demo-setup
+do frontend gera o par nsec/npub e atualiza o npub via PATCH /usuarias/me/npub.
 
 Os 2 perfis demo (convidadas pela Fundadora) NÃO são criados aqui —
 serão criados ao vivo durante a demo, pelo link de convite
@@ -88,6 +89,38 @@ def seed_fundadora():
         print(f"         npub:           None (definido pelo /demo-setup)")
         print(f"         ponto de troca: {fundadora.disponivel_como_ponto}")
         print(f"         convite:        /convite/{fundadora.codigo_indicacao}")
+        print(f"")
+
+        # Segundo perfil mestre — Fornecedora. Mesmo padrão da Fundadora:
+        # tier 3 direto, saldo zerado, disponível como ponto de troca, npub None.
+        # PIN 1234 (mesmo hash que a Fundadora). avalista_id None (mestra, não
+        # vem de convite).
+        fornecedora = Usuaria(
+            identificador="FORNECEDORA",
+            pin_hash=hash_pin("1234"),
+            lnbits_wallet_key="mock_fornecedora_key",
+            codigo_indicacao="FORNECEDORA_INVITE",
+            codigo_indicacao_usado=None,
+            tier=3,  # tier 3 direto — bypass do fluxo de aval
+            saldo_devedor=0,
+            tier_congelado=False,
+            padroes_completos=0,
+            npub=None,  # definido pelo /demo-setup do frontend
+            disponivel_como_ponto=True,  # pode receber trocas na demo
+            avalista_id=None,  # mestra, não vem de convite
+        )
+        db.add(fornecedora)
+        db.commit()
+
+        print(f"[seed] ✓ Fornecedora criada:")
+        print(f"         identificador:  {fornecedora.identificador}")
+        print(f"         PIN:            1234")
+        print(f"         tier:           {fornecedora.tier}")
+        print(f"         saldo_devedor:  {fornecedora.saldo_devedor}")
+        print(f"         congelado:      {fornecedora.tier_congelado}")
+        print(f"         npub:           None (definido pelo /demo-setup)")
+        print(f"         ponto de troca: {fornecedora.disponivel_como_ponto}")
+        print(f"         convite:        /convite/{fornecedora.codigo_indicacao}")
         print(f"")
         print(f"[seed] Banco pronto para a demo!")
         print(f"")

@@ -2,9 +2,14 @@
 
 App de aprendizado de crochê/tecelagem que, por baixo, é uma rede de
 microcrédito peer-to-peer via Lightning Network para mulheres sem acesso
-bancário por controle financeiro coercitivo.
+bancário por controle financeiro coercitivo. O crochê é a superfície visível;
+as funcionalidades financeiras são reveladas por gestos de busca ocultos.
 
 Projeto do hackathon **hack4freedom** (só mulheres).
+
+> **Documentação canônica:** `Arakne-documento-mestre.md` é a referência
+> arquitetural. Este README é um guia operacional. Convenções de
+> desenvolvimento em `AGENTS.md`.
 
 ---
 
@@ -33,7 +38,12 @@ Projeto do hackathon **hack4freedom** (só mulheres).
 | LND        | LND v0.18            | 10009 | Lightning node (regtest)        |
 | LNbits     | LNbits 0.12          | 5000  | Wallet manager / API            |
 | Backend    | Python + FastAPI     | 8000  | API REST + SQLite               |
-| Frontend   | React + Vite         | 5173  | PWA mobile-first                |
+| Frontend   | React 18 + Vite      | 5173  | PWA mobile-first                |
+
+> O repo também contém um app Nostr híbrido na raiz `src/` (React 19 +
+> Nostrify), separado do `frontend/` standalone. A recuperação de conta e
+> a camada Arakne vivem em `frontend/` + `backend/`. Veja `AGENTS.md` para
+> o detalhamento das duas apps.
 
 ---
 
@@ -43,8 +53,6 @@ Projeto do hackathon **hack4freedom** (só mulheres).
 - **Docker Compose** v2+ (`docker compose` — não o `docker-compose` legado)
 
 ### Pre-pull de imagens (offline)
-
-Antes do evento (com internet), rode:
 
 ```bash
 docker pull lncm/bitcoind:26.0
@@ -59,248 +67,186 @@ docker pull node:20-slim
 ## Como subir tudo
 
 ```bash
-# 1. Clonar / abrir o projeto
-cd arakne
-
-# 2. Subir todos os serviços
 docker compose up --build
+bash scripts/init-lightning.sh   # em outro terminal, APÓS compose up
+```
 
-# 3. (em outro terminal) configurar Lightning
-bash scripts/init-lightning.sh
+### Desenvolvimento local (sem Docker)
+
+**Backend:**
+```bash
+cd backend
+pip install -r requirements.txt
+python seed_demo.py                                   # reseta DB + cria FUNDADORA + FORNECEDORA
+uvicorn app.main:app --port 8000 --reload --reload-exclude "*.db" --reload-exclude "*.db-*"
+```
+
+> **Importante:** o `--reload-exclude "*.db"` é obrigatório em desenvolvimento
+> local. Sem ele, o uvicorn assiste o diretório `backend/` e recarrega a cada
+> escrita no `arakne.db` (login, concluir aula, troca, empréstimo) — o backend
+> cai após poucos segundos de uso. O `Dockerfile` já aplica o exclude.
+
+**Frontend:**
+```bash
+cd frontend
+npm install
+npm run dev    # vite em :5173, proxy /api -> backend
 ```
 
 ### Verificação rápida
 
-| Verificação                    | Como                                    |
-|--------------------------------|-----------------------------------------|
-| Backend no ar                  | `curl http://localhost:8000/health`     |
-| Frontend carregando            | Abrir `http://localhost:5173`           |
-| LNbits acessível               | Abrir `http://localhost:5000`           |
-| LNbits: criar wallet de teste  | UI do LNbits → "Add new wallet"         |
-| Auth: criar usuária            | `curl -X POST http://localhost:8000/usuarias ...` (ver abaixo) |
+| Verificação           | Como                                |
+|-----------------------|-------------------------------------|
+| Backend no ar         | `curl http://localhost:8000/health` |
+| Frontend carregando   | Abrir `http://localhost:5173`       |
+| LNbits acessível      | Abrir `http://localhost:5000`       |
+| Seed criou mestras   | `python seed_demo.py` lista FUNDADORA + FORNECEDORA |
 
 ---
 
 ## Migração de banco de dados
 
 **Estratégia:** `Base.metadata.create_all()` (SQLAlchemy) — executada
-automaticamente no startup do FastAPI (`app/main.py`).
+automaticamente no startup do FastAPI (`app/main.py`). Não usamos Alembic.
 
-Não usamos Alembic nesta fase. O `create_all()` é idempotente: cria tabelas
-que ainda não existem, sem tocar nas existentes. Para o hackathon (demo local,
-SQLite), isso é suficiente. Se for necessário versionar schemas no futuro,
-basta adicionar Alembic e um `alembic.ini` em `backend/`.
+O `main.py` tem uma **schema-drift safety net**: se a tabela `usuarias`
+existente estiver faltando colunas, ele dropa e recria todas as tabelas.
+Para adicionar uma coluna nova em desenvolvimento local, delete
+`backend/arakne.db` e rode `python seed_demo.py` (recria do zero).
 
 ---
 
 ## Autenticação pseudônima
 
 O cadastro **não pede nome, CPF, e-mail, nem nenhum dado de identidade real**.
-A usuária fornece apenas um PIN local. O sistema gera:
+A usuária escolhe um PIN (4-8 dígitos) e um apelido opcional. O sistema gera:
 
-- **`identificador`** — string aleatória opaca (ex: `K7x9_aBcD1e`) que substitui login/e-mail
-- **`codigo_indicacao`** — código de indicação próprio da usuária (para tier 3)
-- **`pin_hash`** — PIN hasheado com bcrypt (nunca armazenado em texto puro)
+- **`identificador`** — string opaca (login/e-mail substituto)
+- **`codigo_indicacao`** — código de convite próprio (para tier 3)
+- **`apelido`** — nome de exibição (opcional, mostrado em vez do npub)
+- **`pin_hash`** — PIN hasheado com bcrypt
 
-Tokens de sessão são strings opacas aleatórias, armazenadas na tabela `sessoes`
-com expiração de 30 dias.
+Tokens de sessão são strings opacas, 30 dias de expiração. CORS é
+`allow_origins=["*"]` com `allow_credentials=False` (Bearer-token auth,
+sem cookies).
 
-### Endpoints
+### Endpoints de usuária
 
-#### POST /usuarias — criar usuária
+| Método | Path                                          | Auth | Descrição                                  |
+|--------|-----------------------------------------------|------|--------------------------------------------|
+| POST   | `/usuarias`                                   | —    | Criar usuária (PIN 4-8 dígitos + apelido)   |
+| GET    | `/usuarias/me`                                | Bearer | Dados da própria usuária                 |
+| PATCH  | `/usuarias/me/npub`                           | Bearer | Vincular npub Nostr (demo-setup)         |
+| PATCH  | `/usuarias/me/apelido`                        | Bearer | Atualizar apelido                        |
+| GET    | `/usuarias/me/convite`                        | Bearer | Gerar link de convite (tier 3+)          |
+| GET    | `/usuarias/me/avalistas-recuperacao`          | Bearer | Lista de tecelãs vinculadas              |
+| POST   | `/usuarias/me/avalistas-recuperacao`          | Bearer | Vincular tecelã posteriormente           |
+| POST   | `/usuarias/me/recovery-share`                 | Bearer | Upsert share 1 (criptografada com PIN)    |
+| GET    | `/usuarias/me/recovery-share`                 | Bearer | Baixar share 1                            |
+| GET    | `/usuarias/by-identificador/{id}/npub`        | —    | Lookup público de npub                    |
+| GET    | `/usuarias/by-identificador/{id}/avalistas-recuperacao` | — | Lookup público de tecelãs (com apelido) |
 
-```bash
-curl -X POST http://localhost:8000/usuarias \
-  -H "Content-Type: application/json" \
-  -d '{"pin": "1234"}'
+---
 
-# Com código de indicação (opcional):
-curl -X POST http://localhost:8000/usuarias \
-  -H "Content-Type: application/json" \
-  -d '{"pin": "1234", "codigo_indicacao": "Rt3_mN9p"}'
-```
+## Recuperação de conta (2FA social)
 
-Resposta (201):
-```json
-{
-  "identificador": "K7x9_aBcD1e",
-  "codigo_indicacao": "Rt3_mN9p",
-  "codigo_indicacao_usado": null,
-  "tier": 0,
-  "saldo_devedor": 0,
-  "tier_congelado": false,
-  "padroes_completos": 0,
-  "criado_em": "2025-07-13T20:15:00"
-}
-```
+Modelo: **1 PIN + 1 nsec**, com recuperação social via **Opção E** (SSSS
+T=2,N=2 — threshold criptográfico real) + **QR on-demand**.
 
-> Guarde o `identificador` — ele é a única forma de logar.
+- **Share 0** → tecelã de confiança via NIP-59 gift-wrap (kind 1059)
+- **Share 1** → backend, criptografada com PIN
+- **Recuperação**: convidada pede ajuda (disfarçado "pedir aula de ponto")
+  → tecelã vê sino 🎀 → desembrulha share 0 → gera QR efêmero (canvas, TTL
+  5min) → convidada escaneia → combina share 0 + share 1 (via PIN) →
+  reconstrói nsec → adota novo Ponto Arakne.
 
-#### POST /login — obter token de sessão
+**Travamento §5.2 "pernas da aranha":** após 8 tentativas falhas de
+PIN/padrão, bloqueio com backoff exponencial (1min → 24h). "Sair" não
+apaga a identidade (mantém nsec criptografado no localStorage para
+re-acesso); "Desfazer todos os pontos" apaga a identidade real.
 
-```bash
-curl -X POST http://localhost:8000/login \
-  -H "Content-Type: application/json" \
-  -d '{"identificador": "K7x9_aBcD1e", "pin": "1234"}'
-```
+> A recuperação vive em `frontend/src/lib/{ssss,recovery-*,gift-wrap,
+> pattern-crypto,pattern-storage}.ts` + `frontend/src/components/Recovery*`
+> + `frontend/src/pages/onboarding/Recover*`. O backend só guarda a
+> share 1 e os slots de tecelãs.
 
-Resposta (200):
-```json
-{
-  "token": "s3kr3t_t0k3n...",
-  "token_type": "bearer",
-  "identificador": "K7x9_aBcD1e"
-}
-```
+---
 
-#### GET /usuarias/me — dados da própria usuária
+## Trilhas de aprendizagem (camada disfarce)
 
-```bash
-curl http://localhost:8000/usuarias/me \
-  -H "Authorization: Bearer s3kr3t_t0k3n..."
-```
+9 trilhas, 54 aulas, 127 materiais (seed). A trilha 9 / nível 1 / ordem 1
+é o **portal disfarçado** "Aula: Ponto Renascido" — revela a camada
+financeira para quem já tem identidade, ou leva ao onboarding para quem
+não tem.
 
-Resposta (200): mesmo formato do cadastro, sem `pin_hash`, `avalista_id`, ou `id` interno.
+| Método | Path                                  | Auth | Descrição                          |
+|--------|---------------------------------------|------|------------------------------------|
+| GET    | `/trilhas`                            | —    | Lista todas as trilhas             |
+| GET    | `/trilhas/{id}`                       | —    | Detalhe de uma trilha com aulas    |
+| GET    | `/trilhas/me`                         | Bearer | Trilhas em que a usuária tem progresso |
+| POST   | `/trilhas/{id}/inscrever`            | Bearer | Inscrever em todas as aulas da trilha |
+| POST   | `/trilhas/aulas/{aula_id}/iniciar`   | Bearer | Iniciar uma aula específica       |
+| POST   | `/trilhas/aulas/{aula_id}/concluir`  | Bearer | Concluir aula                      |
 
-#### GET /usuarias/me/convite — gerar link de convite (tier 3+ apenas)
+---
 
-```bash
-curl http://localhost:8000/usuarias/me/convite \
-  -H "Authorization: Bearer s3kr3t_t0k3n..."
-```
+## Microcrédito (camada financeira)
 
-Resposta (200):
-```json
-{
-  "codigo": "Rt3_mN9p",
-  "link": "/convite/Rt3_mN9p"
-}
-```
+### Empréstimos
 
-Disponível apenas para usuárias em tier 3 ou superior (`pode_avalizar`).
-Ao cadastrar uma nova usuária com esse `codigo_indicacao`, o Aval é criado
-automaticamente e a nova usuária já nasce com tier 1.
+| Método | Path                          | Auth | Descrição                          |
+|--------|-------------------------------|------|------------------------------------|
+| POST   | `/emprestimos/{identificador}` | Bearer | Solicitar empréstimo (gera invoice) |
+| POST   | `/emprestimos/{id}/pagamento`  | Bearer | Pagar (parcial ou total)           |
+| GET    | `/emprestimos/{id}`            | Bearer | Detalhes                           |
+| GET    | `/emprestimos/{id}/status`     | Bearer | Polling LNbits                     |
+
+### Pontos de Troca (Fornecedora de Linha)
+
+Fluxo com **aprovação explícita da fornecedora**: solicitante pede troca
+→ status `pendente` → fornecedora vê no sino e na FinancialPage →
+`confirmar` (incrementa reputação) ou `recusar`.
+
+| Método | Path                                       | Auth | Descrição                          |
+|--------|--------------------------------------------|------|------------------------------------|
+| PUT    | `/pontos-de-troca/disponibilidade`         | Bearer | Ativar/desativar-se como ponto    |
+| GET    | `/pontos-de-troca`                          | —    | Lista de pontos disponíveis       |
+| POST   | `/trocas`                                  | Bearer | Solicitar troca (fica pendente)   |
+| POST   | `/trocas/{id}/confirmar`                    | Bearer | Fornecedora confirma (só o ponto) |
+| POST   | `/trocas/{id}/recusar`                      | Bearer | Fornecedora recusa (só o ponto)   |
+| GET    | `/trocas/minhas`                            | Bearer | Trocas como solicitante e como ponto |
+
+### Avals (motor de risco)
+
+| Método | Path     | Auth | Descrição                          |
+|--------|----------|------|------------------------------------|
+| POST   | `/avais` | —    | Uma usuária avalia outra (tier 0→1) |
+
+### Pix e Custódia (time financeiro)
+
+| Método | Path                  | Auth | Descrição                          |
+|--------|-----------------------|------|------------------------------------|
+| POST   | `/pix/cobranca`       | Bearer | Gerar cobrança Pix                |
+| GET    | `/pix/cobranca/{txid}` | Bearer | Status da cobrança               |
+| POST   | `/pix/webhook`        | —    | Webhook Mercado Pago              |
+| GET    | `/custodia`           | —    | Dados públicos da reserva fria multisig |
 
 ---
 
 ## Integração com LNbits
 
-O backend integra com a API REST do LNbits para criar wallets, gerar invoices
-Lightning, e confirmar pagamentos. Cada Usuaria recebe uma wallet dedicada no
-LNbits no momento do cadastro.
+Sem `LNBITS_ADMIN_KEY` / `LNBITS_POOL_KEY`, o backend opera em **modo mock**
+(simula invoices). Para pagamentos reais:
 
-### Configuração
-
-Sem configuração, o backend opera em **modo mock** (simula invoices sem LNbits).
-Para habilitar pagamentos reais:
-
-1. Suba os serviços: `docker compose up --build`
-2. Acesse `http://localhost:5000` (LNbits) — copie a **admin key** da wallet
-3. Crie uma wallet "pool" no LNbits e copie a admin key dela
-4. Crie um `.env` na raiz do projeto:
-
-```bash
-LNBITS_ADMIN_KEY=sua_admin_key_aqui
-LNBITS_POOL_KEY=sua_pool_admin_key_aqui
-```
-
-5. Reinicie o backend: `docker compose restart backend`
-
-### Endpoints de microcrédito
-
-#### POST /avais — dar aval (uma usuária avalia outra)
-
-```bash
-curl -X POST http://localhost:8000/avais \
-  -H "Content-Type: application/json" \
-  -d '{"avalista_identificador": "K7x9...", "nova_usuaria_identificador": "A1b2..."}'
-```
-
-Cria registro de Aval, define `avalista_id` na nova usuária, e sobe tier 0→1.
-
-#### POST /emprestimos/{identificador} — solicitar empréstimo
-
-```bash
-curl -X POST http://localhost:8000/emprestimos/A1b2...
-```
-
-Valida `pode_emprestar()`, gera invoice Lightning no valor do limite do tier,
-paga da wallet pool, e registra o empréstimo como ativo.
-
-Resposta (201):
-```json
-{
-  "id": 1,
-  "usuaria_id": 2,
-  "valor_sats": 5000,
-  "invoice_id": "mock_...",
-  "status": "ativo",
-  "criado_em": "2025-07-13T21:00:00",
-  "quitado_em": null,
-  "invoice_bolt11": "lnbc5000mock..."
-}
-```
-
-#### POST /emprestimos/{id}/pagamento — pagar empréstimo
-
-```bash
-curl -X POST http://localhost:8000/emprestimos/1/pagamento \
-  -H "Content-Type: application/json" \
-  -d '{"valor_sats": 5000}'
-```
-
-Gera invoice na pool wallet, a wallet da usuária paga, atualiza `saldo_devedor`.
-Se zerar, chama `ao_quitar()` (sobe tier) e marca como "quitado".
-
-Resposta (200):
-```json
-{
-  "emprestimo_id": 1,
-  "valor_pago": 5000,
-  "saldo_devedor": 0,
-  "quitado": true,
-  "tier": 2
-}
-```
-
-#### GET /emprestimos/{id} — detalhes do empréstimo
-
-```bash
-curl http://localhost:8000/emprestimos/1
-```
-
-#### GET /emprestimos/{id}/status — polling de pagamento no LNbits
-
-```bash
-curl http://localhost:8000/emprestimos/1/status
-```
-
-Verifica no LNbits se o invoice foi pago. Retorna `{status, paid, saldo_devedor}`.
-
-### Fluxo completo via curl
-
-```bash
-# 1. Criar avalista
-A=$(curl -s -X POST http://localhost:8000/usuarias \
-  -H "Content-Type: application/json" -d '{"pin":"1234"}' | jq -r .identificador)
-
-# 2. Criar nova usuária
-B=$(curl -s -X POST http://localhost:8000/usuarias \
-  -H "Content-Type: application/json" -d '{"pin":"5678"}' | jq -r .identificador)
-
-# 3. Dar aval (tier 0→1)
-curl -s -X POST http://localhost:8000/avais \
-  -H "Content-Type: application/json" \
-  -d "{\"avalista_identificador\":\"$A\",\"nova_usuaria_identificador\":\"$B\"}"
-
-# 4. Pedir empréstimo (tier 1 = 5.000 sats)
-curl -s -X POST http://localhost:8000/emprestimos/$B
-
-# 5. Pagar (simulado)
-curl -s -X POST http://localhost:8000/emprestimos/1/pagamento \
-  -H "Content-Type: application/json" -d '{"valor_sats":5000}'
-# → {"quitado": true, "tier": 2, "saldo_devedor": 0}
-```
+1. `docker compose up --build`
+2. Acesse `http://localhost:5000` (LNbits) → copie a admin key da wallet
+3. Crie uma wallet "pool" no LNbits e copie a admin key
+4. Crie um `.env` na raiz:
+   ```bash
+   LNBITS_ADMIN_KEY=sua_admin_key_aqui
+   LNBITS_POOL_KEY=sua_pool_admin_key_aqui
+   ```
+5. `docker compose restart backend`
 
 ---
 
@@ -308,84 +254,67 @@ curl -s -X POST http://localhost:8000/emprestimos/1/pagamento \
 
 ```
 arakne/
-├── docker-compose.yml        # orquestra todos os serviços
-├── config/
-│   ├── bitcoin/
-│   │   └── bitcoin.conf      # Bitcoin Core (regtest)
-│   └── lnd/
-│       └── lnd.conf          # LND (regtest)
-├── scripts/
-│   └── init-lightning.sh     # setup do Bitcoin + LND
+├── docker-compose.yml
+├── AGENTS.md                    # convenções de desenvolvimento
+├── Arakne-documento-mestre.md   # referência arquitetural canônica
+├── config/                      # bitcoin + lnd (regtest)
+├── scripts/                     # init-lightning, multisig
+├── src/                         # app Nostr híbrido (React 19 + Nostrify)
 ├── backend/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── pytest.ini
+│   ├── seed_demo.py             # reseta DB + cria FUNDADORA + FORNECEDORA
+│   ├── run_demo.py              # demo end-to-end via API (<10s, mock)
 │   └── app/
-│       ├── __init__.py
-│       ├── main.py            # FastAPI app + create_all()
-│       ├── database.py        # SQLAlchemy engine + session
-│       ├── config.py          # env vars (LNbits URL, keys)
-│       ├── auth.py            # hash PIN, sessão, get_current_usuaria
-│       ├── models/
-│       │   ├── __init__.py
-│       │   ├── base.py
-│       │   ├── usuaria.py
-│       │   ├── sessao.py
-│       │   ├── padrao.py
-│       │   ├── progresso.py
-│       │   ├── emprestimo.py
-│       │   └── aval.py
-│       ├── schemas/
-│       │   ├── __init__.py
-│       │   ├── usuaria.py
-│       │   ├── auth.py
-│       │   ├── emprestimo.py
-│       │   └── aval.py
-│       ├── routers/
-│       │   ├── __init__.py
-│       │   ├── health.py      # GET /health
-│       │   ├── auth.py        # POST /login
-│       │   ├── usuarias.py    # POST /usuarias, GET /usuarias/me, GET /usuarias/me/convite
-│       │   ├── avais.py       # POST /avais
-│       │   └── emprestimos.py # POST /emprestimos, POST /pagamento, GET /status
-│       ├── services/
-│       │   ├── __init__.py
-│       │   ├── risco.py       # motor de risco
-│       │   └── lnbits.py      # LNbits API client + mock fallback
-│       └── tests/
-│           ├── __init__.py
-│           ├── conftest.py
-│           ├── test_health.py
-│           ├── test_risco.py
-│           └── test_emprestimos.py
+│       ├── main.py              # FastAPI app + create_all() + drift safety
+│       ├── models/              # 11 modelos (Usuaria, Sessao, Emprestimo,
+│       │                        #   Aval, Troca, Trilha, Aula, Material,
+│       │                        #   ProgressoAula, AvalistaRecuperacao,
+│       │                        #   RecoveryShareBackup, PagamentoPix, ...)
+│       ├── routers/             # 9 routers (health, auth, usuarias, avais,
+│       │                        #   emprestimos, pontos_troca, trilhas, pix,
+│       │                        #   custodia)
+│       ├── schemas/             # Pydantic schemas
+│       ├── services/            # risco, lnbits, bech32, pix
+│       └── tests/               # pytest (111 testes)
 └── frontend/
-    ├── Dockerfile
     ├── package.json
-    ├── tsconfig.json
-    ├── vite.config.ts
-    ├── index.html
     └── src/
-        ├── main.tsx
-        ├── App.tsx
-        └── styles.css
+        ├── App.tsx              # máquina de estados (sem React Router)
+        ├── api.ts               # cliente API + localStorage keys
+        ├── styles.css           # tipografia Cinzel + Fraunces + Inter
+        ├── components/           # RecoveryBell, RecoveryQRGenerator,
+        │                        #   RecoveryScanner, MeuCodigoQR, Header
+        ├── hooks/               # useRecoveryListener, useRecoveryBellData
+        ├── lib/                 # ssss, recovery-*, gift-wrap, pattern-crypto
+        ├── pages/
+        │   ├── onboarding/      # Splash, CreateAccount, RecoverAccount,
+        │   │                    #   RecoverySetup, RecoveryHelpRequest
+        │   ├── FinancialPage.tsx    # camada financeira (troca, QR, tecelã)
+        │   ├── PerfilPage.tsx       # bancada (nível/tier)
+        │   ├── TrilhasPage.tsx      # catálogo disfarce
+        │   ├── MeusProjetosPage.tsx # trilhas em andamento
+        │   └── ...
+        └── types.ts
 ```
 
 ---
 
 ## Modelo de dados
 
-| Tabela           | Campos principais                                                      |
-|------------------|------------------------------------------------------------------------|
-| **Usuaria**      | id, identificador, pin_hash, lnbits_wallet_key, codigo_indicacao, codigo_indicacao_usado, tier (0-3), saldo_devedor, tier_congelado, avalista_id (FK), padroes_completos, criado_em |
-| **Sessao**       | id, usuaria_id (FK), token, criada_em, expira_em                       |
-| **Padrao**       | id, nivel, nome_publico, sats_desbloqueados                            |
-| **ProgressoPadrao** | usuaria_id, padrao_id, completo_em                                  |
-| **Emprestimo**   | id, usuaria_id, valor_sats, invoice_id, status, criado_em, quitado_em  |
-| **Aval**         | usuaria_que_avaliza_id, nova_usuaria_id, criado_em                     |
+| Tabela                  | Campos principais                                                              |
+|-------------------------|--------------------------------------------------------------------------------|
+| **Usuaria**             | id, identificador, pin_hash, apelido, npub, lnbits_wallet_key, codigo_indicacao, codigo_indicacao_usado, tier (0-3), saldo_devedor, tier_congelado, avalista_id (FK self), disponivel_como_ponto, trocas_como_ponto_concluidas, padroes_completos, criado_em |
+| **Sessao**              | id, usuaria_id, token, criada_em, expira_em                                     |
+| **Emprestimo**          | id, usuaria_id, valor_sats, invoice_id, status, criado_em, quitado_em           |
+| **Aval**                | usuaria_que_avaliza_id, nova_usuaria_id, criado_em                              |
+| **Troca**               | id, solicitante_id, ponto_id, valor_sats, status, criado_em, confirmada_em     |
+| **Trilha / Aula / Material** | trilha_id, nivel, ordem, aula_id, material_id, url, ...                  |
+| **ProgressoAula**       | usuaria_id, aula_id, concluida, concluida_em, inscrita_em                      |
+| **AvalistaRecuperacao** | usuaria_id, npub_avaliadora, ordem, is_shadow, criado_em                        |
+| **RecoveryShareBackup** | usuaria_id (unique), encrypted_share_blob, criado_em                            |
+| **PagamentoPix / CustodiaMultisig** | (time financeiro)                                                |
 
-> **Nenhum campo de identidade real** (nome, CPF, e-mail) existe no banco.
-> A coluna `avalista_id` existe para o motor de risco calcular elegibilidade,
-> mas **nunca aparece na interface** — nem para a própria usuária.
+> **Nenhum campo de identidade real** (nome, CPF, e-mail). `avalista_id`
+> existe para o motor de risco mas **nunca aparece na interface**.
 
 ---
 
@@ -401,6 +330,8 @@ arakne/
 - Atraso >14 dias → `tier_congelado = true` (usuária + avalista)
 - Completar padrões **não** libera crédito
 - Nunca reduz tier retroativamente
+- O nível da bancada (PerfilPage) e o tier financeiro (FinancialPage) são
+  a mesma fonte (`usuaria.tier`) — sempre sincronizados.
 
 ---
 
@@ -410,74 +341,54 @@ arakne/
 
 ```bash
 cd backend
-python seed_demo.py          # reseta o banco e cria Usuária A (tier 1)
-uvicorn app.main:app --port 8000   # sobe o backend
+python seed_demo.py          # reseta o banco + cria FUNDADORA + FORNECEDORA
+uvicorn app.main:app --port 8000 --reload --reload-exclude "*.db" --reload-exclude "*.db-*"
+# em outro terminal:
+cd frontend && npm run dev
 ```
 
-### Roteiro automatizado (verifica todo o fluxo)
-
-```bash
-python run_demo.py
-```
-
-O script executa:
-1. Seed (reseta banco + cria Usuária A em tier 1)
-2. Usuária B nasce pelo convite de A → tier 1 automático
-3. B pede empréstimo (5.000 sats)
-4. B paga parcialmente (2.000) → saldo abaixa para 3.000
-5. B paga o restante (3.000) → tier sobe para 2
-6. Verificação final
-
-**Tempo esperado:** < 10s (mock mode, sem rede Lightning real).
-
-### Roteiro manual (pela interface)
-
-1. Rodar `python seed_demo.py` + `uvicorn` + `docker compose up frontend`
-2. Abrir `http://localhost:5173/convite/DEMO_A_INVITE`
-   - Usuária B é criada + aval automático → tier 1
-3. Digitar "Ponto Arakne" na busca → tela "Meus Materiais"
-4. Clicar "Solicitar Kit de Material" → empréstimo de 5.000
-5. Clicar "Concluir Padrão" → pagar 2.000 (parcial) → saldo 3.000
-6. Clicar "Concluir Padrão" → pagar 3.000 (restante) → tier sobe para 2
-
-### Dados de seed
-
-| Usuária | Identificador | PIN | Tier | Notas |
-|---------|----------------|-----|------|-------|
-| A | `demo_usuaria_a` | `1234` | 1 | Pronta para demo, saldo 0 |
-| Shadow | `shadow_avalista_seed` | `0000` | 3 | Descartável, só para o aval de A |
-| B | (criada na demo) | `5678` | 1 | Nasce pelo link `/convite/DEMO_A_INVITE` |
-
----
-
-## Desenvolvimento local (sem Docker)
-
-### Backend
+### Roteiro automatizado (verifica todo o fluxo de microcrédito)
 
 ```bash
 cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+python run_demo.py    # <10s, mock mode
 ```
 
-### Frontend
+### Roteiro manual (pela interface)
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+1. Abrir `http://localhost:5173/demo-setup`
+   - Gera nsec/npub, faz login da Fundadora, atualiza npub
+   - Mostra identificador + PIN + padrão + convite
+2. Abrir `http://localhost:5173/convite/FUNDADORA_INVITE`
+   - Cria Perfil 1 (convidada pela Fundadora, tier 1)
+3. Abrir `http://localhost:5173/convite/FUNDADORA_INVITE` (ou `FORNECEDORA_INVITE`)
+   - Cria Perfil 2 (mesmo link gera 2º cadastro via "Iniciar novo projeto")
+4. Na conta Fundadora: buscar "Ponto Arakne" → tela financeira
+5. Transferir (ponto de troca) entre Fundadora e Perfil 1/2
+6. Testar recuperação: deslogar → "Recuperar acesso" → "pedir aula de ponto"
+
+### Dados de seed
+
+| Usuária      | Identificador  | PIN  | Tier | Notas                                  |
+|--------------|----------------|------|------|----------------------------------------|
+| Fundadora    | `FUNDADORA`    | 1234 | 3    | Mestra, npub via /demo-setup           |
+| Fornecedora  | `FORNECEDORA`  | 1234 | 3    | Mestra, ponto de troca para testes     |
+| Convidada    | (criada na demo) | —  | 1    | Nasce pelo link `/convite/FUNDADORA_INVITE` |
 
 ---
 
 ## Notas de segurança
 
 - A tela inicial é um catálogo de padrões de crochê — **nenhum símbolo cripto** visível.
-- Notificações usam linguagem têxtil ("novo padrão disponível").
+- Notificações usam linguagem têxtil ("novo padrão disponível", "aula de ponto").
 - O gesto de busca por um padrão-código revela a tela financeira.
 - O grafo de avalistas **nunca** aparece na interface.
 - PIN hasheado com bcrypt — nunca armazenado em texto puro.
 - Tokens de sessão são opacos e expiram em 30 dias.
+- nsec Nostr criptografado no localStorage (AES-GCM + PBKDF2 600k).
+- Travamento após 8 tentativas falhas (backoff exponencial).
+- QR de recuperação renderizado em `<canvas>` (não `<img>`), TTL 5min,
+  `user-select: none`, `pointer-events: none` — mitigação contra screenshot.
 
 ---
 

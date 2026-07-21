@@ -49,7 +49,7 @@ import DecoyPage from "./pages/DecoyPage";
 import FinancialPage from "./pages/FinancialPage";
 import ExtratoPage from "./pages/ExtratoPage";
 import ComunidadePage from "./pages/ComunidadePage";
-import ComingSoonPage from "./pages/ComingSoonPage";
+import MeusProjetosPage from "./pages/MeusProjetosPage";
 import PerfilPage from "./pages/PerfilPage";
 import ScannerQRPage from "./pages/ScannerQRPage";
 import SemConexaoPage from "./pages/SemConexaoPage";
@@ -258,15 +258,35 @@ export default function App() {
   // verdade. Se existe, pede o desenho; senão, vai ao onboarding.
   // Exceção: /demo-setup sempre mostra a DemoSetupPage, independente de
   // identidade armazenada (a pessoa da demo pode rodar o setup várias vezes).
+  //
+  // BUG 1 (link de convite): se há `inviteCodigo` na URL, priorizamos a
+  // `inviteDecision` — mesmo que já exista uma identidade armazenada neste
+  // aparelho. Assim a 2ª visita a `/convite/FUNDADORA_INVITE` (com a 1ª
+  // conta já criada) ainda abre a tela de convite, que oferece o botão
+  // "Iniciar um novo projeto com este convite" (limpa a identidade atual
+  // e segue para createAccount). Heurística:
+  //   - inviteCodigo + sessão destravada → catalog (re-login normal)
+  //   - inviteCodigo + sessão NÃO destravada → inviteDecision (permite
+  //     criar nova conta ou entrar na conta existente)
+  //   - sem inviteCodigo + identidade → patternLogin/catalog (fluxo normal)
+  //   - sem inviteCodigo + sem identidade → splash
   useEffect(() => {
     if (isDemoSetupPath()) {
       setView("demoSetup");
       return;
     }
+    if (inviteCodigo) {
+      // Link de convite presente na URL. Se a sessão já está destravada
+      // (re-login normal), vai direto ao catálogo. Caso contrário, mostra
+      // a tela de convite — que oferece criar nova conta (limpando a
+      // identidade atual) ou entrar na conta existente.
+      setView(isUnlockedThisSession() ? "catalog" : "inviteDecision");
+      return;
+    }
     if (hasStoredIdentity()) {
       setView(isUnlockedThisSession() ? "catalog" : "patternLogin");
     } else {
-      setView(inviteCodigo ? "inviteDecision" : "splash");
+      setView("splash");
     }
   }, [inviteCodigo]);
 
@@ -334,6 +354,7 @@ export default function App() {
           setUsarConvite(false);
           setView("createAccount");
         }}
+        onEntrarExistente={() => setView("patternLogin")}
       />
     );
   }
@@ -534,7 +555,17 @@ export default function App() {
   }
 
   if (view === "projetos") {
-    return <ComingSoonPage active="projetos" title="Meus Projetos" onNavigate={(t) => setView(NAV_TO_VIEW[t])} />;
+    return (
+      <MeusProjetosPage
+        onBack={() => setView("catalog")}
+        onAbrirTrilha={(id) => {
+          setSelectedTrilhaId(id);
+          setView("trilhaDetail");
+        }}
+        onVerTrilhas={() => setView("catalog")}
+        onNavigate={(t) => setView(NAV_TO_VIEW[t])}
+      />
+    );
   }
 
   if (view === "perfil") {

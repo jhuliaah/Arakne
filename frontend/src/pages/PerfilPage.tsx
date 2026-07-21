@@ -6,7 +6,6 @@ import {
   ensureToken,
   getMe,
   getNickname,
-  setDisponibilidadePonto,
   logout,
 } from "../api";
 import { clearStoredIdentity, softLogout } from "../lib/pattern-storage";
@@ -35,8 +34,6 @@ export default function PerfilPage({ onNavigate, onLoggedOut }: PerfilPageProps)
   const [loading, setLoading] = useState(true);
   const showSkeleton = useDelayedFlag(loading);
   const [error, setError] = useState<string | null>(null);
-  const [togglingPonto, setTogglingPonto] = useState(false);
-  const [pontoError, setPontoError] = useState<string | null>(null);
   const [confirmandoSaida, setConfirmandoSaida] = useState(false);
   // Confirmação dupla para "Apagar conta deste dispositivo" (Mudança #5a).
   const [confirmandoApagar, setConfirmandoApagar] = useState(false);
@@ -61,27 +58,6 @@ export default function PerfilPage({ onNavigate, onLoggedOut }: PerfilPageProps)
       setLoading(false);
     })();
   }, []);
-
-  const handleToggleSouPonto = async () => {
-    if (!usuaria) return;
-    setTogglingPonto(true);
-    setPontoError(null);
-    const token = await ensureToken();
-    if (!token) {
-      setTogglingPonto(false);
-      return;
-    }
-    const novoValor = !usuaria.disponivel_como_ponto;
-    const resp = await setDisponibilidadePonto(token, novoValor);
-    setTogglingPonto(false);
-    if (!resp.ok) {
-      setPontoError(
-        "Ainda não dá pra se tornar uma Fornecedora de Linha — isso libera a partir do nível 1."
-      );
-      return;
-    }
-    setUsuaria({ ...usuaria, disponivel_como_ponto: resp.disponivel ?? novoValor });
-  };
 
   const handleSair = () => {
     // "Sair" NÃO apaga a identidade (Mudança #5a): só desloga a sessão
@@ -184,25 +160,6 @@ export default function PerfilPage({ onNavigate, onLoggedOut }: PerfilPageProps)
                 não terminou o padrão dela.
               </div>
             )}
-
-            <div className="community__group-card" style={{ marginBottom: "1.5rem" }}>
-              <div className="community__group-emoji">🪢</div>
-              <div style={{ flex: 1 }}>
-                <div className="community__group-name">Fornecedora de Linha</div>
-                <div className="community__group-meta">
-                  {usuaria.trocas_como_ponto_concluidas} trocas concluídas
-                </div>
-              </div>
-              <label style={{ display: "flex", alignItems: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={usuaria.disponivel_como_ponto}
-                  disabled={togglingPonto}
-                  onChange={handleToggleSouPonto}
-                />
-              </label>
-            </div>
-            {pontoError && <p className="field__error">{pontoError}</p>}
           </>
         )}
 
