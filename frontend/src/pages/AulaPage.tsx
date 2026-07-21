@@ -18,6 +18,7 @@
 
 import { useState } from "react";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
 import HexPatternCanvas from "../components/HexPatternCanvas";
 import { concluirAula, generatePin, criarConta, markUnlockedThisSession } from "../api";
@@ -186,7 +187,9 @@ export default function AulaPage({
 
     return (
       <div className="page">
-        <Header />
+        <Header>
+          <RecoveryBellHost />
+        </Header>
         <main className="catalog">
           <button className="financial__back" onClick={onBack} aria-label="Voltar">
             ← Voltar

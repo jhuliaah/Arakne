@@ -1,4 +1,4 @@
-/** CreateAccountPage — onboarding: nome + consentimento + desenho do Ponto Arakne.
+/** CreateAccountPage — onboarding: nome + consentimento + PIN de acesso + Ponto Arakne.
  *
  *  Substitui o antigo PIN numérico pela identidade Nostr: a usuária desenha
  *  um padrão hexagonal (Ponto Arakne) que vira a senha de destravamento.
@@ -6,15 +6,19 @@
  *  no localStorage. O npub (chave pública bech32) é o identificador de
  *  backup — anotado em QR/papel — usado na próxima tela (RecoverySetupPage).
  *
- *  A conta do backend ainda é criada com um PIN aleatório interno (nunca
- *  mostrado à usuária) para manter a integração financeira existente.
- *  Este ciclo, npub não vai ao backend (YAGNI).
+ *  Mudança #8-frontend: a usuária ESCOLHE um PIN numérico de acesso (4-8
+ *  dígitos), em vez de o PIN ser gerado aleatoriamente. Esse PIN é o
+ *  "código de reserva" usado para decriptar a share 1 do backend na
+ *  recuperação social (Opção E). O Ponto Arakne continua sendo desenhado
+ *  no HexPatternCanvas (mode="register"). O disfarce é preservado: a UI
+ *  chama o PIN de "código de acesso ao projeto", sem mencionar
+ *  "recuperação".
  */
 
 import { useState } from "react";
 import Header from "../../components/Header";
 import HexPatternCanvas from "../../components/HexPatternCanvas";
-import { criarConta, generatePin, setNickname } from "../../api";
+import { criarConta, setNickname } from "../../api";
 import { createAndStoreIdentity } from "../../lib/pattern-storage";
 import type { NostrIdentity } from "../../lib/nostr-keys";
 
@@ -24,18 +28,41 @@ interface CreateAccountPageProps {
   /** Chamado quando o padrão foi confirmado e a identidade Nostr criada.
    *  Recebe npub (chave pública bech32 — mostrada na próxima tela),
    *  nsec (chave privada bech32 — passada adiante para distribuir os
-   *  shards SSSS aos avalistas) e o PIN gerado (usado para criptografar
-   *  a share 1 antes de enviar ao backend — Opção E). O nsec NÃO é
-   *  persistido em plaintext; ele só existe em memória entre esta tela e
-   *  a RecoverySetupPage. */
+   *  shards SSSS aos avalistas) e o PIN escolhido (usado para
+   *  criptografar a share 1 antes de enviar ao backend — Opção E). O
+   *  nsec NÃO é persistido em plaintext; ele só existe em memória entre
+   *  esta tela e a RecoverySetupPage. */
   onCreated: (npub: string, nsec: string, pin: string) => void;
 }
+
+/** Tamanho mínimo/máximo do PIN de acesso (Mudança #8). */
+const PIN_MIN = 4;
+const PIN_MAX = 8;
 
 export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: CreateAccountPageProps) {
   const [nome, setNome] = useState("");
   const [consent, setConsent] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // PIN de acesso escolhido pela usuária (Mudança #8). Disfarçado de
+  // "código de acesso ao projeto" — não menciona recuperação.
+  const [pin, setPin] = useState("");
+  const [pinConfirm, setPinConfirm] = useState("");
+  const [pinTouched, setPinTouched] = useState(false);
+  const [pinConfirmTouched, setPinConfirmTouched] = useState(false);
+
+  // Validações do PIN (só disparam depois do primeiro toque/campo sujo).
+  const pinLengthOk = pin.length >= PIN_MIN && pin.length <= PIN_MAX;
+  const pinConfirmMatches = pin === pinConfirm && pinLengthOk;
+  const pinValid = pinLengthOk && pinConfirmMatches;
+  const showPinError = pinTouched && !pinLengthOk;
+  const showPinConfirmError = pinConfirmTouched && pin !== pinConfirm;
+
+  // Só libera o canvas de Ponto Arakne quando o PIN está válido e o
+  // consentimento está marcado. Isso evita a usuária desenhar o padrão
+  // antes de ter um PIN válido (que é necessário para criar a conta).
+  const podeDesenhar = pinValid && consent;
 
   async function handlePatternConfirmed(pattern: number[]) {
     setError(null);
@@ -45,17 +72,18 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
       //    criptografa nsec com o padrão e guarda no localStorage.
       const identity: NostrIdentity = await createAndStoreIdentity(pattern);
 
-      // 2. Cria conta no backend com PIN aleatório interno (a usuária não vê).
-      //    Mantém a integração financeira existente (ensureToken/login).
-      const pin = generatePin();
-      const usuaria = await criarConta(pin, inviteCodigo);
+      // 2. Cria conta no backend com o PIN escolhido pela usuária
+      //    (Mudança #8 — antes era generatePin()). O PIN é o "código de
+      //    reserva" que a usuária vai anotar e usar na recuperação social.
+      const apelido = nome.trim() || undefined;
+      const usuaria = await criarConta(pin, inviteCodigo, undefined, apelido);
       if (!usuaria) {
         setError("Não foi possível criar sua conta agora. Tente novamente.");
         setLoading(false);
         return;
       }
 
-      if (nome.trim()) setNickname(nome.trim());
+      if (apelido) setNickname(apelido);
       onCreated(identity.npub, identity.nsec, pin);
     } catch {
       setError("Algo deu errado ao guardar seu desenho. Tente novamente.");
@@ -84,6 +112,66 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
             />
           </div>
 
+          {/* PIN de acesso (Mudança #8) — disfarçado de "código de
+              acesso ao projeto". A usuária escolhe 4-8 dígitos numéricos
+              e confirma. Esse PIN é o "código de reserva" usado na
+              recuperação social (Opção E), mas a UI não menciona
+              "recuperação" para preservar o disfarce. */}
+          <div className="field">
+            <label className="field__label" htmlFor="pin">
+              Código de acesso ao projeto
+            </label>
+            <input
+              id="pin"
+              className="field__input"
+              type="password"
+              inputMode="numeric"
+              value={pin}
+              onChange={(e) => {
+                // Só aceita dígitos, até 8 caracteres.
+                const v = e.target.value.replace(/\D/g, "").slice(0, PIN_MAX);
+                setPin(v);
+              }}
+              onBlur={() => setPinTouched(true)}
+              placeholder={`${PIN_MIN} a ${PIN_MAX} dígitos`}
+              autoComplete="off"
+              maxLength={PIN_MAX}
+            />
+            <p className="field__hint">
+              Anote este código — ele abre seu projeto se você perder seu
+              Ponto Arakne. Só números, entre {PIN_MIN} e {PIN_MAX} dígitos.
+            </p>
+            {showPinError && (
+              <p className="field__error">
+                O código precisa ter entre {PIN_MIN} e {PIN_MAX} dígitos.
+              </p>
+            )}
+          </div>
+
+          <div className="field">
+            <label className="field__label" htmlFor="pinConfirm">
+              Confirme seu código de acesso
+            </label>
+            <input
+              id="pinConfirm"
+              className="field__input"
+              type="password"
+              inputMode="numeric"
+              value={pinConfirm}
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, "").slice(0, PIN_MAX);
+                setPinConfirm(v);
+              }}
+              onBlur={() => setPinConfirmTouched(true)}
+              placeholder="Digite o mesmo código"
+              autoComplete="off"
+              maxLength={PIN_MAX}
+            />
+            {showPinConfirmError && (
+              <p className="field__error">Os códigos não batem.</p>
+            )}
+          </div>
+
           <label className="checkbox-row">
             <input
               type="checkbox"
@@ -105,11 +193,19 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
             </p>
           </div>
 
-          <HexPatternCanvas
-            mode="register"
-            onPatternConfirmed={handlePatternConfirmed}
-            minLength={8}
-          />
+          {podeDesenhar ? (
+            <HexPatternCanvas
+              mode="register"
+              onPatternConfirmed={handlePatternConfirmed}
+              minLength={8}
+            />
+          ) : (
+            <p className="field__hint" style={{ textAlign: "center" }}>
+              {consent
+                ? "Preencha e confirme seu código de acesso para desenhar o Ponto Arakne."
+                : "Marque o consentimento para continuar."}
+            </p>
+          )}
 
           {loading && (
             <p className="field__hint" style={{ textAlign: "center", marginTop: "0.75rem" }}>

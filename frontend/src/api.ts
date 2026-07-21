@@ -105,11 +105,17 @@ export function generatePin(): string {
 
 // ── API calls ───────────────────────────────────────────────
 
-export async function createUsuaria(pin: string, codigoIndicacao?: string, npub?: string): Promise<Usuaria | null> {
+export async function createUsuaria(
+  pin: string,
+  codigoIndicacao?: string,
+  npub?: string,
+  apelido?: string,
+): Promise<Usuaria | null> {
   try {
     const body: Record<string, string> = { pin };
     if (codigoIndicacao) body.codigo_indicacao = codigoIndicacao;
     if (npub) body.npub = npub;
+    if (apelido) body.apelido = apelido;
     const resp = await fetch(`${API_BASE}/usuarias`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -176,6 +182,26 @@ export async function updateNpub(token: string, npub: string): Promise<Usuaria |
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ npub }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Atualiza o apelido da usuária logada via PATCH /usuarias/me/apelido
+ *  (Mudança #7-frontend). A Lane A adiciona o endpoint no backend.
+ *  Retorna a usuária atualizada, ou null em falha. */
+export async function updateApelido(token: string, apelido: string): Promise<Usuaria | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/usuarias/me/apelido`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ apelido }),
     });
     if (!resp.ok) return null;
     return await resp.json();
@@ -317,7 +343,12 @@ export async function getMinhasTrocas(token: string): Promise<Troca[] | null> {
 /** Avalista de recuperação retornado pelo backend: cada uma das 3
  *  tecelãs de confiança que guardam um shard do nsec da dona. O campo
  *  `is_shadow` marca as tecelãs-sombra (placeholder com npub gerado
- *  automaticamente quando a dona não indicou ninguém). */
+ *  automaticamente quando a dona não indicou ninguém).
+ *
+ *  `apelido` (Mudança #7-frontend) — apelido da tecelã, retornado pelo
+ *  backend (Lane A) quando disponível. Pode ser null/ausente se a
+ *  tecelã ainda não definiu apelido; a UI faz fallback para npub
+ *  truncado. */
 export interface AvalistaRecuperacao {
   id: number;
   usuaria_id: number;
@@ -325,6 +356,7 @@ export interface AvalistaRecuperacao {
   ordem: number;
   is_shadow: boolean;
   criado_em: string;
+  apelido?: string | null;
 }
 
 /** Busca os 3 avalistas de recuperação da usuária logada.
@@ -498,12 +530,13 @@ export async function recuperarConta(
 export async function criarConta(
   pin: string,
   inviteCodigo?: string | null,
-  npub?: string
+  npub?: string,
+  apelido?: string,
 ): Promise<Usuaria | null> {
   // Se o caller não passou npub explicitamente, tenta ler do localStorage
   // (a identidade Nostr já deve ter sido criada por createAndStoreIdentity).
   const npubFinal = npub ?? getStoredNpub() ?? undefined;
-  const usuaria = await createUsuaria(pin, inviteCodigo ?? undefined, npubFinal);
+  const usuaria = await createUsuaria(pin, inviteCodigo ?? undefined, npubFinal, apelido);
   if (!usuaria) return null;
 
   setIdentificador(usuaria.identificador);
@@ -512,6 +545,13 @@ export async function criarConta(
   // Login imediato para obter token (mantém ensureToken funcionando).
   const loginResp = await login(usuaria.identificador, pin);
   if (loginResp) setToken(loginResp.token);
+
+  // Se o backend não aceitou `apelido` no POST (schema antigo), tenta
+  // novamente via PATCH /usuarias/me/apelido (best-effort — não falha
+  // a criação da conta se o endpoint ainda não existir).
+  if (apelido && loginResp) {
+    await updateApelido(loginResp.token, apelido);
+  }
 
   if (inviteCodigo) {
     markAvalCreated(inviteCodigo);

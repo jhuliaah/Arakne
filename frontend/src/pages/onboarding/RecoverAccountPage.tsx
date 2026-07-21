@@ -45,6 +45,7 @@ import HexPatternCanvas from "../../components/HexPatternCanvas";
 import { markUnlockedThisSession, getNpubByIdentificador } from "../../api";
 import {
   startRecoveryRequest,
+  startRecoveryRequestWithNsec,
   subscribeToRecoveryResponses,
   tryCombineShares,
   type RecoveryRequestResult,
@@ -52,12 +53,17 @@ import {
 } from "../../lib/recovery-request";
 import { adoptRecoveredIdentity, resetFailedAttempts } from "../../lib/pattern-storage";
 import { base64ToBytes } from "../../lib/recovery-serialize";
+import { decodeNsec } from "../../lib/nostr-keys";
 
 interface RecoverAccountPageProps {
   /** Chamado quando o nsec foi recuperado, guardado e a sessão destravada. */
   onRecovered: () => void;
   /** Volta para PatternLoginPage. */
   onBack: () => void;
+  /** "Pedir aula de ponto" — disfarçado de pedido de ajuda a uma tecelã
+   *  (Mudança #3). A Lane D conecta à view de pedido de ajuda (Lane C
+   *  cria a UI). Opcional com default para não quebrar o build. */
+  onPedirAulaPonto?: () => void;
 }
 
 /** Estados da máquina de recuperação. */
@@ -76,10 +82,16 @@ const RESPONSE_TIMEOUT_MS = 60_000;
 export default function RecoverAccountPage({
   onRecovered,
   onBack,
+  onPedirAulaPonto,
 }: RecoverAccountPageProps) {
   const [phase, setPhase] = useState<Phase>("input");
+  // Caminho escolhido no estado input (Mudança #3): "pin" (fluxo atual,
+  // busca share 1 no backend) ou "nsec" (a dona tem o nsec anotado).
+  const [path, setPath] = useState<"pin" | "nsec">("pin");
   const [identificador, setIdentificador] = useState("");
   const [pin, setPin] = useState("");
+  const [nsecInput, setNsecInput] = useState("");
+  const [nsecError, setNsecError] = useState<string | null>(null);
   const [paperBackup, setPaperBackup] = useState("");
   const [responses, setResponses] = useState<RecoveryResponse[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -88,6 +100,9 @@ export default function RecoverAccountPage({
   const [backendShareOk, setBackendShareOk] = useState(false);
   // Indica se há convidadora (1 avalista) ou não (0 — paper backup).
   const [hasConvidadora, setHasConvidadora] = useState(true);
+  // Caminho nsec: se a dona colou um nsec válido, guardamos os bytes
+  // para adotar direto (sem combine) no estado newPattern.
+  const nsecDirectRef = useRef<Uint8Array | null>(null);
 
   // Guarda o resultado do pedido (nsec efêmero + npub esperado da dona +
   // share 1 do backend) entre os estados. Refs porque não precisam
@@ -116,7 +131,14 @@ export default function RecoverAccountPage({
   }, []);
 
   // ── Estado 2: dispara o pedido ao backend + relays ─────────
+  // Ramifica por `path` (Mudança #3): "pin" (fluxo SSSS original,
+  // busca share 1 no backend) ou "nsec" (a dona tem o nsec anotado,
+  // só precisa desembrulhar a share 0 da convidadora via NIP-59).
   async function handleSearch() {
+    if (path === "nsec") {
+      await handleSearchNsec();
+      return;
+    }
     const id = identificador.trim();
     const pinTrim = pin.trim();
     if (!id) {
@@ -183,6 +205,69 @@ export default function RecoverAccountPage({
       console.error("[RecoverAccountPage] startRecoveryRequest falhou:", err);
       setErrorMsg(
         "Não conseguimos reatar seus fios agora. Confira o identificador e o código de reserva.",
+      );
+      setPhase("error");
+    }
+  }
+
+  // ── Estado 2 (caminho nsec): a dona tem o nsec anotado ──────
+  // Neste caminho (Mudança #3), a dona cola/escaneia o nsec. Decodifica,
+  // deriva npub, busca avalistas no backend (se souber o identificador)
+  // e envia o pedido NIP-59 à convidadora. Como a dona JÁ TEM o nsec,
+  // ela não precisa combinar shares — pode adotar o nsec direto. Mas
+  // mantemos o fluxo SSSS para o caso de a dona querer validar com a
+  // convidadora (opcional). O caminho mais comum é: tem nsec → adota
+  // direto após desenhar o novo Ponto Arakne.
+  async function handleSearchNsec() {
+    const nsecTrim = nsecInput.trim();
+    if (!nsecTrim) {
+      setNsecError("Cole sua chave secreta (nsec1...).");
+      return;
+    }
+
+    // Valida o nsec imediatamente (feedback rápido antes de ir ao backend).
+    let nsecBytes: Uint8Array;
+    try {
+      nsecBytes = decodeNsec(nsecTrim);
+    } catch (err) {
+      setNsecError(
+        `Chave secreta inválida. Precisa começar com "nsec1". ${(err as Error).message}`,
+      );
+      return;
+    }
+    if (nsecBytes.length !== 32) {
+      setNsecError("Chave secreta com tamanho errado.");
+      return;
+    }
+    setNsecError(null);
+
+    setPhase("searching");
+    setErrorMsg("");
+
+    // Guarda o nsec direto para adoção sem combine (a dona já tem a
+    // chave — não precisa das shares SSSS).
+    nsecDirectRef.current = nsecBytes;
+
+    try {
+      const id = identificador.trim() || null;
+      const result = await startRecoveryRequestWithNsec(nsecTrim, id);
+      requestResultRef.current = result;
+      expectedOwnerNpubRef.current = result.ownerNpub;
+      backendShareRef.current = null;
+      setBackendShareOk(false);
+      setHasConvidadora(result.published > 0);
+
+      // Se a dona tem o nsec, ela não precisa esperar respostas — pode
+      // ir direto ao novo Ponto Arakne. Mas se há convidadora, ainda
+      // inscrevemos para o caso de ela querer validar (opcional). O
+      // fluxo principal aqui é: tem nsec → desenha novo padrão → adota.
+      // Vamos direto ao newPattern (mais simples e útil).
+      setResponses([]);
+      setPhase("newPattern");
+    } catch (err) {
+      console.error("[RecoverAccountPage] startRecoveryRequestWithNsec falhou:", err);
+      setErrorMsg(
+        "Não conseguimos reatar seus fios com essa chave. Confira sua chave secreta.",
       );
       setPhase("error");
     }
@@ -294,22 +379,33 @@ export default function RecoverAccountPage({
 
   // ── Estado 4: combina shares + adota identidade ────────────
   async function handlePatternConfirmed(newPattern: number[]) {
-    const ownerNpub = expectedOwnerNpubRef.current;
-    if (!ownerNpub) {
-      setErrorMsg(
-        "Não conseguimos reatar seus fios agora. Tente novamente ou peça ajuda a outra tecelã.",
-      );
-      setPhase("error");
-      return;
-    }
-
     setCombining(true);
     try {
-      const recoveredNsec = await tryCombineShares(
-        backendShareRef.current,
-        responses,
-        ownerNpub,
-      );
+      let recoveredNsec: Uint8Array | null = null;
+
+      // Caminho nsec (Mudança #3): a dona colou o nsec — adota direto,
+      // sem combinar shares. O nsec já foi validado em handleSearchNsec.
+      if (nsecDirectRef.current) {
+        recoveredNsec = nsecDirectRef.current;
+      } else {
+        // Caminho PIN (fluxo SSSS original): combina share 1 do backend
+        // + share 0 da convidadora (ou paper backup).
+        const ownerNpub = expectedOwnerNpubRef.current;
+        if (!ownerNpub) {
+          setErrorMsg(
+            "Não conseguimos reatar seus fios agora. Tente novamente ou peça ajuda a outra tecelã.",
+          );
+          setPhase("error");
+          setCombining(false);
+          return;
+        }
+        recoveredNsec = await tryCombineShares(
+          backendShareRef.current,
+          responses,
+          ownerNpub,
+        );
+      }
+
       if (!recoveredNsec) {
         setErrorMsg(
           "Não conseguimos reatar seus fios agora. Tente novamente ou peça ajuda a outra tecelã.",
@@ -343,9 +439,11 @@ export default function RecoverAccountPage({
     // Volta ao estado 1, preservando o identificador digitado (conveniência).
     setResponses([]);
     setErrorMsg("");
+    setNsecError(null);
     requestResultRef.current = null;
     expectedOwnerNpubRef.current = null;
     backendShareRef.current = null;
+    nsecDirectRef.current = null;
     setBackendShareOk(false);
     setHasConvidadora(true);
     setPhase("input");
@@ -363,7 +461,7 @@ export default function RecoverAccountPage({
           ← Voltar
         </button>
 
-        {/* Estado 1 — Input do identificador + PIN */}
+        {/* Estado 1 — Input: dois caminhos (PIN ou nsec) + pedir ajuda */}
         {phase === "input" && (
           <>
             <h1 className="onboarding__title">Reatar seus fios</h1>
@@ -372,57 +470,160 @@ export default function RecoverAccountPage({
               reatar os fios do seu ateliê.
             </p>
 
+            {/* Seletor de caminho (Mudança #3): "Tenho meu PIN" ou
+                "Tenho minha chave secreta". Disfarçado de abas de
+                "como você quer reatar seus fios". */}
             <div className="onboarding__form">
-              <div className="field">
-                <label className="field__label" htmlFor="identificador">
-                  Identificador do seu ateliê
-                </label>
-                <input
-                  id="identificador"
-                  className="field__input"
-                  type="text"
-                  value={identificador}
-                  onChange={(e) => setIdentificador(e.target.value)}
-                  placeholder="abc123_XyZ"
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  disabled={combining}
-                />
-                <p className="field__hint">
-                  É o código que você anotou ao criar sua conta.
-                </p>
+              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+                <button
+                  type="button"
+                  className={path === "pin" ? "btn btn--primary" : "btn btn--secondary"}
+                  onClick={() => setPath("pin")}
+                  style={{ flex: 1 }}
+                >
+                  Tenho meu PIN
+                </button>
+                <button
+                  type="button"
+                  className={path === "nsec" ? "btn btn--primary" : "btn btn--secondary"}
+                  onClick={() => setPath("nsec")}
+                  style={{ flex: 1 }}
+                >
+                  Tenho minha chave
+                </button>
               </div>
 
-              <div className="field">
-                <label className="field__label" htmlFor="pin">
-                  Código de reserva (PIN)
-                </label>
-                <input
-                  id="pin"
-                  className="field__input"
-                  type="password"
-                  inputMode="numeric"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="4 dígitos"
-                  autoComplete="off"
-                  disabled={combining}
-                />
-                <p className="field__hint">
-                  É o código de reserva que você anotou ao configurar suas
-                  tecelãs.
-                </p>
-              </div>
+              {/* Caminho 1: PIN (fluxo SSSS original) */}
+              {path === "pin" && (
+                <>
+                  <div className="field">
+                    <label className="field__label" htmlFor="identificador">
+                      Identificador do seu ateliê
+                    </label>
+                    <input
+                      id="identificador"
+                      className="field__input"
+                      type="text"
+                      value={identificador}
+                      onChange={(e) => setIdentificador(e.target.value)}
+                      placeholder="abc123_XyZ"
+                      autoComplete="off"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      disabled={combining}
+                    />
+                    <p className="field__hint">
+                      É o código que você anotou ao criar sua conta.
+                    </p>
+                  </div>
 
-              <button
-                className="btn btn--primary"
-                onClick={handleSearch}
-                disabled={!identificador.trim() || !pin.trim()}
-              >
-                Procurar tecelãs
-              </button>
+                  <div className="field">
+                    <label className="field__label" htmlFor="pin">
+                      Código de reserva (PIN)
+                    </label>
+                    <input
+                      id="pin"
+                      className="field__input"
+                      type="password"
+                      inputMode="numeric"
+                      value={pin}
+                      onChange={(e) => setPin(e.target.value)}
+                      placeholder="4 dígitos"
+                      autoComplete="off"
+                      disabled={combining}
+                    />
+                    <p className="field__hint">
+                      É o código de reserva que você anotou ao configurar suas
+                      tecelãs.
+                    </p>
+                  </div>
+
+                  <button
+                    className="btn btn--primary"
+                    onClick={handleSearch}
+                    disabled={!identificador.trim() || !pin.trim()}
+                  >
+                    Procurar tecelãs
+                  </button>
+                </>
+              )}
+
+              {/* Caminho 2: nsec (a dona tem a chave secreta anotada) */}
+              {path === "nsec" && (
+                <>
+                  <div className="field">
+                    <label className="field__label" htmlFor="nsecInput">
+                      Sua chave secreta
+                    </label>
+                    <textarea
+                      id="nsecInput"
+                      className="field__input"
+                      value={nsecInput}
+                      onChange={(e) => setNsecInput(e.target.value)}
+                      placeholder="nsec1..."
+                      rows={3}
+                      autoComplete="off"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      disabled={combining}
+                    />
+                    <p className="field__hint">
+                      É a chave longa que você anotou em papel ao criar sua
+                      conta. Começa com "nsec1".
+                    </p>
+                    {nsecError && <p className="field__error">{nsecError}</p>}
+                  </div>
+
+                  <div className="field">
+                    <label className="field__label" htmlFor="identificadorNsec">
+                      Identificador do seu ateliê (opcional)
+                    </label>
+                    <input
+                      id="identificadorNsec"
+                      className="field__input"
+                      type="text"
+                      value={identificador}
+                      onChange={(e) => setIdentificador(e.target.value)}
+                      placeholder="abc123_XyZ"
+                      autoComplete="off"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      disabled={combining}
+                    />
+                    <p className="field__hint">
+                      Se você souber, ajuda suas tecelãs a te encontrar mais
+                      rápido. Se não lembrar, pode deixar em branco.
+                    </p>
+                  </div>
+
+                  <button
+                    className="btn btn--primary"
+                    onClick={handleSearch}
+                    disabled={!nsecInput.trim()}
+                  >
+                    Reatar com minha chave
+                  </button>
+                </>
+              )}
+
+              {/* Se a usuária não tem nem PIN nem nsec → pedir ajuda a
+                  uma tecelã (disfarçado de "pedir aula de ponto").
+                  A Lane C cria a UI do pedido; a Lane D conecta o
+                  callback. Texto crochê: "Não consigo acessar meu
+                  projeto — quero pedir uma aula de ponto a uma tecelã". */}
+              <div className="onboarding__footer-link" style={{ marginTop: "1.25rem" }}>
+                <button
+                  type="button"
+                  onClick={onPedirAulaPonto}
+                  style={{ color: "var(--text-muted, #888)", fontSize: "0.9rem" }}
+                >
+                  Não consigo acessar meu projeto — quero pedir uma aula de
+                  ponto a uma tecelã
+                </button>
+              </div>
             </div>
           </>
         )}

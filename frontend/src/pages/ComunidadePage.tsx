@@ -9,6 +9,7 @@
  */
 
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
 import { grupos, posts } from "../data/community";
 
@@ -19,7 +20,9 @@ interface ComunidadePageProps {
 export default function ComunidadePage({ onNavigate }: ComunidadePageProps) {
   return (
     <div className="page">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="catalog">
         <h2 className="catalog__title">Comunidade</h2>
         <p className="catalog__subtitle">grupos de tricô perto de você</p>

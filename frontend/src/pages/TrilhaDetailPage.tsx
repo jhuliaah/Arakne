@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
 import { getTrilha } from "../api";
 import type { Aula, TrilhaDetail } from "../types";
@@ -42,7 +43,9 @@ export default function TrilhaDetailPage({
 
   return (
     <div className="page">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="catalog">
         <button className="financial__back" onClick={onBack} aria-label="Voltar">
           ← Voltar

@@ -20,10 +20,28 @@
   A camada financeira é revelada pela "aula 1 do nível 1" da trilha #9
   (Ponto Arakne): desenhar o padrão correto destrava a FinancialPage.
   Não há mais gesto de busca secreto na SearchBar.
+
+  Fase 2 (integração Lane D): o fluxo de recuperação social ganhou três
+  novas views:
+    - recoveryHelpRequest: convidada sem PIN nem nsec pede ajuda a uma
+      tecelã (disfarçado de "pedir aula de ponto"). Gera nsec efêmero e
+      publica pedido NIP-59.
+    - recoveryScanner: convidada escaneia o QR on-demand que a tecelã
+      preparou (share 0 + ownerNpub).
+    - recoveryCombine: convidada informa identificador + PIN para buscar
+      a share 1 no backend; combina share 0 (QR) + share 1 (backend)
+      via SSSS e reconstrói o nsec.
+    - recoveryAdoptPattern: convidada desenha um NOVO Ponto Arakne para
+      re-criptografar o nsec recuperado neste dispositivo.
+    - recoveryQRGenerator: tecelã (logada) aceita um pedido do sino e
+      gera o QR on-demand com a share 0 que tem em cache.
+
+  O SSSS (Opção E, T=2 N=2) é MANTIDO — o QR on-demand é uma camada
+  extra por cima, não substitui o fluxo NIP-59 existente.
 */
 
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import TrilhasPage from "./pages/TrilhasPage";
 import TrilhaDetailPage from "./pages/TrilhaDetailPage";
 import AulaPage from "./pages/AulaPage";
@@ -33,7 +51,6 @@ import ExtratoPage from "./pages/ExtratoPage";
 import ComunidadePage from "./pages/ComunidadePage";
 import ComingSoonPage from "./pages/ComingSoonPage";
 import PerfilPage from "./pages/PerfilPage";
-import MeuQRCodePage from "./pages/MeuQRCodePage";
 import ScannerQRPage from "./pages/ScannerQRPage";
 import SemConexaoPage from "./pages/SemConexaoPage";
 import InviteDecisionPage from "./pages/InviteDecisionPage";
@@ -42,12 +59,34 @@ import CreateAccountPage from "./pages/onboarding/CreateAccountPage";
 import RecoverySetupPage from "./pages/onboarding/RecoverySetupPage";
 import PatternLoginPage from "./pages/onboarding/PatternLoginPage";
 import RecoverAccountPage from "./pages/onboarding/RecoverAccountPage";
+import RecoveryHelpRequestPage from "./pages/onboarding/RecoveryHelpRequestPage";
 import DemoSetupPage from "./pages/DemoSetupPage";
+import RecoveryScanner from "./components/RecoveryScanner";
+import RecoveryBell from "./components/RecoveryBell";
+import RecoveryQRGenerator from "./components/RecoveryQRGenerator";
+import HexPatternCanvas from "./components/HexPatternCanvas";
+import Header from "./components/Header";
 import type { NavTarget } from "./components/BottomNav";
 import type { Aula } from "./types";
-import { isUnlockedThisSession } from "./api";
-import { hasStoredIdentity } from "./lib/pattern-storage";
+import {
+  isUnlockedThisSession,
+  markUnlockedThisSession,
+  login,
+  setToken,
+  setIdentificador as setStoredIdentificador,
+  fetchRecoveryShare,
+  getAvalistasRecuperacao,
+  ensureToken,
+} from "./api";
+import {
+  hasStoredIdentity,
+  adoptRecoveredIdentity,
+  resetFailedAttempts,
+} from "./lib/pattern-storage";
 import { useRecoveryListener } from "./hooks/useRecoveryListener";
+import { tryCombineShares, type RecoveryResponse } from "./lib/recovery-request";
+import { decryptWithPin } from "./lib/pattern-crypto";
+import type { IncomingRecoveryRequest } from "./lib/recovery-respond";
 
 type View =
   | "loading"
@@ -57,6 +96,11 @@ type View =
   | "recoverySetup"
   | "patternLogin"
   | "recoverAccount"
+  | "recoveryHelpRequest"
+  | "recoveryScanner"
+  | "recoveryCombine"
+  | "recoveryAdoptPattern"
+  | "recoveryQRGenerator"
   | "demoSetup"
   | "catalog"
   | "trilhaDetail"
@@ -66,7 +110,6 @@ type View =
   | "perfil"
   | "financial"
   | "extrato"
-  | "meuQRCode"
   | "scannerQR"
   | "decoy";
 
@@ -76,6 +119,19 @@ const NAV_TO_VIEW: Record<NavTarget, View> = {
   projetos: "projetos",
   perfil: "perfil",
 };
+
+/** Views que o botão "voltar" do navegador manda para o catálogo. */
+const BACK_TO_CATALOG_VIEWS: View[] = [
+  "financial",
+  "extrato",
+  "scannerQR",
+  "decoy",
+  "comunidade",
+  "projetos",
+  "perfil",
+  "trilhaDetail",
+  "aula",
+];
 
 function getInviteCodigo(): string | null {
   const match = window.location.pathname.match(/^\/convite\/(.+)$/);
@@ -127,6 +183,22 @@ export default function App() {
     typeof navigator === "undefined" ? true : navigator.onLine
   );
 
+  // ── Estado do fluxo de recuperação social (Fase 2) ──────────
+  // Convidada pede ajuda → RecoveryHelpRequestPage gera nsec efêmero
+  // → RecoveryScanner escaneia QR da tecelã (share 0 + ownerNpub) →
+  // RecoveryCombine pede identificador + PIN, busca share 1 no backend,
+  // combina via SSSS → RecoveryAdoptPattern desenha novo Ponto Arakne
+  // e adota o nsec recuperado.
+  // share 0 + ownerNpub escaneados do QR da tecelã.
+  const [recoveryShare0, setRecoveryShare0] = useState<Uint8Array | null>(null);
+  const [recoveryOwnerNpub, setRecoveryOwnerNpub] = useState<string | null>(null);
+  // nsec reconstruído após combine (guardado para o adopt pattern).
+  const [recoveredNsec, setRecoveredNsec] = useState<Uint8Array | null>(null);
+  // Pedido aceito pelo sino (RecoveryBell) → RecoveryQRGenerator.
+  const [recoveryActiveRequest, setRecoveryActiveRequest] = useState<IncomingRecoveryRequest | null>(null);
+  // Mapa npub → apelido para o RecoveryBell (populado sob demanda).
+  const [apelidosMap, setApelidosMap] = useState<Record<string, string>>({});
+
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
     const goOffline = () => setIsOnline(false);
@@ -144,12 +216,42 @@ export default function App() {
   // (distribuídas no onboarding da dona) e responde a pedidos de
   // recuperação automaticamente, usando o cache populado em
   // `loadSharesIntoCache` (dentro do hook). Os pedidos recebidos são
-  // expostos para futura UI de notificação (Track 4D).
-  useRecoveryListener(
+  // expostos para o sino (RecoveryBell) no Header.
+  const recoveryListener = useRecoveryListener(
     unlockedNsec !== null,
     unlockedNsec,
     unlockedPattern,
   );
+
+  // ── Popula mapa de apelidos para o sino (best-effort) ──────
+  // Busca os avalistas de recuperação da usuária logada e constrói
+  // um mapa npub → apelido. O RecoveryBell usa esse mapa para mostrar
+  // o apelido das convidadas que pedem ajuda (em vez de npub truncado).
+  // Se falhar (backend sem o campo apelido ainda), o sino faz fallback.
+  useEffect(() => {
+    if (!recoveryListener.isUnlocked) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await ensureToken();
+        if (!token) return;
+        const lista = await getAvalistasRecuperacao(token);
+        if (cancelled || !lista) return;
+        const mapa: Record<string, string> = {};
+        for (const a of lista) {
+          if (a.apelido) {
+            mapa[a.npub_avaliadora] = a.apelido;
+          }
+        }
+        if (!cancelled) setApelidosMap(mapa);
+      } catch (err) {
+        console.warn("[App] falha ao buscar apelidos para o sino:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recoveryListener.isUnlocked]);
 
   // ── Bootstrap: decide which screen to land on ──────────────
   // A identidade Nostr (nsec criptografado no localStorage) é a fonte de
@@ -174,14 +276,26 @@ export default function App() {
   useEffect(() => {
     const handler = () => {
       setView((current) =>
-        ["financial", "extrato", "meuQRCode", "scannerQR", "decoy", "comunidade", "projetos", "perfil", "trilhaDetail", "aula"].includes(current)
-          ? "catalog"
-          : current
+        BACK_TO_CATALOG_VIEWS.includes(current) ? "catalog" : current
       );
     };
     window.addEventListener("popstate", handler);
     return () => window.removeEventListener("popstate", handler);
   }, []);
+
+  // ── Helper: slot do sino para o Header ──────────────────────
+  // O Header com sino só aparece quando a usuária está logada E
+  // destravada (isUnlocked). Fora disso, Header sem children.
+  const bellSlot = recoveryListener.isUnlocked && recoveryListener.requests.length > 0 ? (
+    <RecoveryBell
+      requests={recoveryListener.requests}
+      onHelp={(req) => {
+        setRecoveryActiveRequest(req);
+        setView("recoveryQRGenerator");
+      }}
+      apelidos={apelidosMap}
+    />
+  ) : undefined;
 
   if (view === "loading") {
     return null;
@@ -204,6 +318,7 @@ export default function App() {
       <SplashPage
         onCreateAccount={() => setView("createAccount")}
         onHaveAccount={() => setView("patternLogin")}
+        onRecuperar={() => setView("recoverAccount")}
       />
     );
   }
@@ -274,6 +389,110 @@ export default function App() {
       <RecoverAccountPage
         onRecovered={() => setView("catalog")}
         onBack={() => setView("patternLogin")}
+        onPedirAulaPonto={() => setView("recoveryHelpRequest")}
+      />
+    );
+  }
+
+  // ── Fluxo de recuperação social (Fase 2) ────────────────────
+
+  if (view === "recoveryHelpRequest") {
+    return (
+      <RecoveryHelpRequestPage
+        onAwaitScanner={(_ephemeralNsec) => {
+          // O nsec efêmero é gerado pelo RecoveryHelpRequestPage para
+          // publicar o pedido NIP-59. No fluxo atual (QR on-demand),
+          // não precisamos dele no App.tsx — o RecoveryScanner só
+          // escaneia o QR da tecelã. Mantemos o callback para futura
+          // extensão (ex.: desembrulhar respostas NIP-59 pelo nsec
+          // efêmero, se o QR falhar).
+          setView("recoveryScanner");
+        }}
+        onBack={() => setView("recoverAccount")}
+      />
+    );
+  }
+
+  if (view === "recoveryScanner") {
+    return (
+      <RecoveryScanner
+        onScanned={({ share0, ownerNpub }) => {
+          // Guarda a share 0 + ownerNpub escaneados e vai para a tela
+          // de combine (pedir identificador + PIN, buscar share 1 no
+          // backend, combinar via SSSS).
+          setRecoveryShare0(share0);
+          setRecoveryOwnerNpub(ownerNpub);
+          setView("recoveryCombine");
+        }}
+        onBack={() => setView("splash")}
+      />
+    );
+  }
+
+  if (view === "recoveryCombine") {
+    return (
+      <RecoveryCombineView
+        share0={recoveryShare0}
+        ownerNpub={recoveryOwnerNpub}
+        onSuccess={(nsec) => {
+          setRecoveredNsec(nsec);
+          setView("recoveryAdoptPattern");
+        }}
+        onCancel={() => setView("splash")}
+      />
+    );
+  }
+
+  if (view === "recoveryAdoptPattern") {
+    return (
+      <div className="page">
+        <Header>{bellSlot}</Header>
+        <main className="onboarding">
+          <h1 className="onboarding__title">Aula: Ponto Renascido</h1>
+          <p className="onboarding__tagline">
+            Suas tecelãs reataram os fios. Agora aprenda um ponto novo para
+            guardar seu ateliê — desenhe a coreografia abaixo.
+          </p>
+          <div style={{ width: "100%", maxWidth: "420px" }}>
+            <HexPatternCanvas
+              mode="register"
+              onPatternConfirmed={async (newPattern) => {
+                if (!recoveredNsec) return;
+                try {
+                  await adoptRecoveredIdentity(recoveredNsec, newPattern);
+                  resetFailedAttempts();
+                  markUnlockedThisSession();
+                  // Limpa o estado transitório do fluxo de recuperação.
+                  setRecoveredNsec(null);
+                  setRecoveryShare0(null);
+                  setRecoveryOwnerNpub(null);
+                  setView("catalog");
+                } catch (err) {
+                  console.error("[App] adoptRecoveredIdentity falhou:", err);
+                  setView("recoverAccount");
+                }
+              }}
+              minLength={8}
+            />
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (view === "recoveryQRGenerator" && recoveryActiveRequest) {
+    return (
+      <RecoveryQRGenerator
+        request={recoveryActiveRequest}
+        avalistaNsec={unlockedNsec}
+        onBack={() => {
+          // Descarta o pedido atendido e volta ao catálogo.
+          if (recoveryActiveRequest) {
+            recoveryListener.clearRequest(recoveryActiveRequest.initiatorNpub);
+          }
+          setRecoveryActiveRequest(null);
+          setView("catalog");
+        }}
       />
     );
   }
@@ -306,10 +525,6 @@ export default function App() {
     );
   }
 
-  if (view === "meuQRCode") {
-    return <MeuQRCodePage onBack={() => setView("perfil")} />;
-  }
-
   if (view === "decoy") {
     return <DecoyPage onBack={() => setView("catalog")} />;
   }
@@ -327,14 +542,19 @@ export default function App() {
       <PerfilPage
         onNavigate={(t) => setView(NAV_TO_VIEW[t])}
         onLoggedOut={() => {
-          // Limpa a identidade destravada — o listener de recuperação
-          // para (effect cleanup) e o cache em memória é limpo pelo
-          // PerfilPage via `clearSharesCache()`.
+          // "Sair" NÃO apaga a identidade (Mudança #5a): só desloga a
+          // sessão (token do backend, nsec destravado em memória, cache
+          // de shares em memória). A identidade Nostr persistida
+          // (nsec criptografado, hash do padrão, npub) PERMANECE no
+          // localStorage — a usuária volta a entrar desenhando o Ponto
+          // Arakne. O PerfilPage já chama softLogout() + clearSharesCache()
+          // + logout() internamente. O "Apagar conta" real (que chama
+          // clearStoredIdentity) é um botão separado no PerfilPage e
+          // também cai aqui — o onLoggedOut é o mesmo para ambos.
           setUnlockedNsec(null);
           setUnlockedPattern(null);
           setView("splash");
         }}
-        onVerMeuCodigo={() => setView("meuQRCode")}
       />
     );
   }
@@ -381,5 +601,157 @@ export default function App() {
       }}
       inviteCodigo={inviteCodigo}
     />
+  );
+}
+
+// ── RecoveryCombineView (sub-componente inline) ───────────────
+// Tela intermediária do fluxo de recuperação social: a convidada já
+// escaneou a share 0 do QR da tecelã. Agora precisa informar
+// identificador + PIN para buscar a share 1 no backend, combinar via
+// SSSS e reconstruir o nsec. Implementada inline no App.tsx para não
+// criar um arquivo novo (a Lane D pode refatorar para uma página
+// própria depois, se quiser).
+interface RecoveryCombineViewProps {
+  share0: Uint8Array | null;
+  ownerNpub: string | null;
+  onSuccess: (nsec: Uint8Array) => void;
+  onCancel: () => void;
+}
+
+function RecoveryCombineView({ share0, ownerNpub, onSuccess, onCancel }: RecoveryCombineViewProps) {
+  const [identificador, setIdentificador] = useState("");
+  const [pin, setPin] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleCombine() {
+    const id = identificador.trim();
+    const pinTrim = pin.trim();
+    if (!id || !pinTrim || !share0 || !ownerNpub) {
+      setError("Informe o identificador e o código de reserva.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      // 1. Login no backend com (identificador, pin) para obter token.
+      const loginResp = await login(id, pinTrim);
+      if (!loginResp) {
+        setError("Código de reserva incorreto. Confira o identificador e o PIN.");
+        setLoading(false);
+        return;
+      }
+      setToken(loginResp.token);
+      setStoredIdentificador(id);
+
+      // 2. Busca a share 1 criptografada no backend.
+      const blob = await fetchRecoveryShare();
+      if (!blob) {
+        setError("Não encontramos seu fio no ateliê central. Confira o identificador.");
+        setLoading(false);
+        return;
+      }
+
+      // 3. Decripta a share 1 com o PIN.
+      const share1 = await decryptWithPin(blob, pinTrim);
+      if (!share1) {
+        setError("Código de reserva incorreto para o fio do ateliê central.");
+        setLoading(false);
+        return;
+      }
+
+      // 4. Combina share 0 (QR) + share 1 (backend) via SSSS e valida
+      //    o pubkey contra o ownerNpub escaneado do QR.
+      const response: RecoveryResponse = {
+        avalistaNpub: "qr-scanned",
+        share: share0,
+        vaultId: "",
+      };
+      const nsec = await tryCombineShares(share1, [response], ownerNpub);
+      if (!nsec) {
+        setError("Não conseguimos reatar seus fios. Confira se o PIN e o identificador estão corretos.");
+        setLoading(false);
+        return;
+      }
+
+      onSuccess(nsec);
+    } catch (err) {
+      console.error("[RecoveryCombineView] combine falhou:", err);
+      setError("Não conseguimos reatar seus fios agora. Tente novamente.");
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="page">
+      <Header />
+      <main className="onboarding">
+        <button className="onboarding__back" onClick={onCancel}>
+          ← Voltar
+        </button>
+        <h1 className="onboarding__title">Reatar seus fios</h1>
+        <p className="onboarding__tagline">
+          Sua tecelã compartilhou a amostra. Agora precisamos do seu
+          identificador e do seu código de reserva para buscar o outro fio
+          no ateliê central.
+        </p>
+
+        <div className="onboarding__form">
+          <div className="field">
+            <label className="field__label" htmlFor="rc-identificador">
+              Identificador do seu ateliê
+            </label>
+            <input
+              id="rc-identificador"
+              className="field__input"
+              type="text"
+              value={identificador}
+              onChange={(e) => setIdentificador(e.target.value)}
+              placeholder="abc123_XyZ"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              disabled={loading}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field__label" htmlFor="rc-pin">
+              Código de reserva (PIN)
+            </label>
+            <input
+              id="rc-pin"
+              className="field__input"
+              type="password"
+              inputMode="numeric"
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              placeholder="4 dígitos"
+              autoComplete="off"
+              disabled={loading}
+            />
+          </div>
+
+          {error && <p className="field__error">{error}</p>}
+
+          <button
+            className="btn btn--primary"
+            onClick={handleCombine}
+            disabled={loading || !identificador.trim() || !pin.trim()}
+          >
+            {loading ? "Reatando..." : "Reatar fios"}
+          </button>
+          <button
+            className="btn btn--secondary"
+            onClick={onCancel}
+            disabled={loading}
+            style={{ marginTop: "0.5rem" }}
+          >
+            Cancelar
+          </button>
+        </div>
+      </main>
+    </div>
   );
 }

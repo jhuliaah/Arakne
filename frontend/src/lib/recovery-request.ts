@@ -55,7 +55,7 @@
 
 import { wrapToRecipient, unwrapReceived } from "./gift-wrap";
 import { publishEvent, subscribeWrapsForNpub } from "./nostr-pool";
-import { decodeNpub } from "./nostr-keys";
+import { decodeNpub, decodeNsec } from "./nostr-keys";
 import { base64ToBytes } from "./recovery-serialize";
 import { combineNsecWithCheck, T } from "./ssss";
 import { decryptWithPin } from "./pattern-crypto";
@@ -223,6 +223,139 @@ export async function startRecoveryRequest(
     published,
     failed,
     backendShare,
+  };
+}
+
+/**
+ * Inicia o pedido de recuperação pelo caminho nsec (Mudança #3).
+ *
+ * Cenário: a usuária perdeu o aparelho mas AINDA TEM o nsec (anotado
+ * em papel, ou colado de outro lugar). Neste caso, ela não precisa do
+ * PIN nem da share 1 do backend — só precisa desembrulhar a share 0
+ * que está com a convidadora via NIP-59.
+ *
+ * Fluxo:
+ * 1. Decodifica o nsec fornecido → deriva o npub da dona.
+ * 2. Busca os avalistas de recuperação no backend pelo npub. Como o
+ *    endpoint público é por `identificador` (não por npub), e a dona
+ *    pode não lembrar o identificador neste caminho, aceitamos o
+ *    identificador opcional. Se não fornecido, não há como buscar
+ *    avalistas — o caller deve tratar.
+ * 3. Gera nsec efêmero, gift-wrap um pedido a cada convidadora e
+ *    publica nos relays.
+ * 4. Retorna o nsec efêmero + o npub da dona (para validação final
+ *    em `tryCombineShares`). A share 1 do backend fica null (não
+ *    buscada — a dona tem o nsec, não precisa da share 1).
+ *
+ * Nota: este caminho NÃO substitui o SSSS — ele só pula a busca da
+ * share 1 do backend (que a dona não precisa, pois já tem o nsec).
+ * A share 0 ainda vem da convidadora via NIP-59 e é combinada com...
+ * na verdade, se a dona já tem o nsec, ela não precisa combinar
+ * shares — pode adotar o nsec direto. Mas mantemos o fluxo SSSS para
+ * o caso de a dona ter o nsec ANOTADO mas querer validar com a
+ * convidadora (cenário raro). O caller decide: se tem nsec, pode
+ * pular o combine e ir direto para `adoptRecoveredIdentity`.
+ *
+ * @param nsecBech32 - nsec da dona (nsec1...) — a chave privada original
+ * @param identificador - identificador da conta (para buscar avalistas).
+ *   Se não souber, passe null — o caller precisa de outro jeito de
+ *   achar as convidadoras (raro).
+ * @returns resultado com nsec efêmero + npub da dona. backendShare
+ *   é sempre null neste caminho.
+ * @throws se o nsec for inválido ou se não conseguir buscar avalistas
+ */
+export async function startRecoveryRequestWithNsec(
+  nsecBech32: string,
+  identificador: string | null,
+): Promise<RecoveryRequestResult & { ownerNpub: string }> {
+  // 1. Decodifica o nsec fornecido → bytes → deriva npub.
+  let nsecBytes: Uint8Array;
+  try {
+    nsecBytes = decodeNsec(nsecBech32);
+  } catch (err) {
+    throw new Error(
+      `startRecoveryRequestWithNsec: nsec inválido: ${(err as Error).message}`,
+    );
+  }
+  if (nsecBytes.length !== 32) {
+    throw new Error(
+      `startRecoveryRequestWithNsec: nsec tem ${nsecBytes.length} bytes, esperado 32.`,
+    );
+  }
+  const ownerPubHex = getPublicKey(nsecBytes);
+  const ownerNpub = nip19.npubEncode(ownerPubHex);
+
+  // 2. Gera nsec efêmero para receber as respostas.
+  const ephemeralNsec = generateSecretKey();
+  const ephemeralPubHex = getPublicKey(ephemeralNsec);
+  const ephemeralNpub = nip19.npubEncode(ephemeralPubHex);
+
+  // 3. Busca avalistas no backend (precisa do identificador).
+  let avalistas: { npub_avaliadora: string }[] = [];
+  if (identificador) {
+    const lista = await getAvalistasByIdentificador(identificador);
+    if (lista) {
+      avalistas = lista.map((a) => ({ npub_avaliadora: a.npub_avaliadora }));
+    }
+  }
+
+  // 4. Gift-wrap um pedido a cada convidadora e publica.
+  let published = 0;
+  let failed = 0;
+
+  for (const avalista of avalistas) {
+    const avalistaNpub = avalista.npub_avaliadora;
+    let avalistaPubHex: string;
+    try {
+      avalistaPubHex = decodeNpub(avalistaNpub);
+    } catch (err) {
+      failed++;
+      console.error(
+        `[recovery-request] npub de avalista inválido: ${avalistaNpub}`,
+        err,
+      );
+      continue;
+    }
+
+    const rumorContent: RecoveryRumor = {
+      type: "request",
+      ownerNpub,
+      vaultId: "",
+      initiatorNpub: ephemeralNpub,
+      message: "Uma de suas aranhinhas pediu uma aula sobre o Ponto Arakne, pode ajudar?",
+      createdAt: Math.floor(Date.now() / 1000),
+    };
+
+    const wrap = wrapToRecipient(
+      ephemeralNsec,
+      avalistaPubHex,
+      rumorContent,
+      [["t", RECOVERY_TAGS.request]],
+    );
+
+    try {
+      const ok = await publishEvent(wrap);
+      if (ok) {
+        published++;
+      } else {
+        failed++;
+      }
+    } catch (err) {
+      failed++;
+      console.error(
+        `[recovery-request] erro ao publicar pedido para ${avalistaNpub}:`,
+        err,
+      );
+    }
+  }
+
+  return {
+    ephemeralNpub,
+    ephemeralNsec,
+    published,
+    failed,
+    backendShare: null,
+    ownerNpub,
   };
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import { ensureToken, getEmprestimoIds, getEmprestimo, getMinhasTrocas } from "../api";
 import type { Emprestimo, Troca } from "../types";
 import { useDelayedFlag } from "../lib/useDelayedFlag";
@@ -48,7 +49,9 @@ export default function ExtratoPage({ onBack }: ExtratoPageProps) {
 
   return (
     <div className="page theme-financial">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="financial">
         <button className="financial__back" onClick={onBack} aria-label="Voltar">
           ← Voltar

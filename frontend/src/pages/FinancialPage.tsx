@@ -3,6 +3,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import {
   createEmprestimo,
   ensureToken,
@@ -20,6 +21,7 @@ import {
 import type { ConviteResponse } from "../api";
 import type { Emprestimo, PontoDeTroca, Usuaria } from "../types";
 import { useDelayedFlag } from "../lib/useDelayedFlag";
+import MeuCodigoQR from "../components/MeuCodigoQR";
 
 interface FinancialPageProps {
   onBack: () => void;
@@ -293,7 +295,9 @@ export default function FinancialPage({
   if (loading) {
     return (
       <div className="page theme-financial">
-        <Header />
+        <Header>
+          <RecoveryBellHost />
+        </Header>
         <main className="financial">
           <button className="financial__back" onClick={onBack} aria-label="Voltar">
             ← Voltar aos padrões
@@ -320,7 +324,9 @@ export default function FinancialPage({
 
   return (
     <div className="page theme-financial">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="financial">
         <button className="financial__back" onClick={onBack} aria-label="Voltar">
           ← Voltar aos padrões
@@ -565,6 +571,20 @@ export default function FinancialPage({
               </button>
             </div>
           )}
+        </div>
+
+        {/* Meu código de Ponto de Troca (Mudança #6) — QR do
+            identificador da usuária, para outra tecedora escanear em
+            vez de digitar à mão. Saiu do PerfilPage (camada crochê) e
+            passou a viver aqui, na camada financeira — o QR de
+            Fornecedora de Linha não pertence à bancada crochê. */}
+        <div className="financial__invite">
+          <h3 className="financial__history-title">Meu código de Ponto de Troca</h3>
+          <p className="financial__invite-text">
+            Mostre este código para outra tecedora escanear, em vez de
+            digitar seu identificador na mão.
+          </p>
+          <MeuCodigoQR compact />
         </div>
 
         {/* Pattern progress */}
