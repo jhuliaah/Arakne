@@ -1269,6 +1269,81 @@ h1, h2, h3,
   color: var(--color-muted);
 }
 
+/* ── Reserva do ateliê central (custódia multisig) ───────────
+   Disfarce: card informativo na Bancada de Trabalho que mostra
+   dados públicos da reserva coletiva (endereço, quorum, rede).
+   Visualmente subordinado ao card de nível — é informação, não
+   ação. Acento dourado discreto ecoa a ideia de "reserva/tesouro",
+   sem usar o vocabulário financeiro da camada revelada. */
+.perfil__reserva {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  padding: 0.875rem 1rem;
+  box-shadow: var(--shadow);
+  border-left: 3px solid var(--color-accent);
+  margin-bottom: 0.875rem;
+}
+
+.perfil__reserva-header {
+  margin-bottom: 0.625rem;
+}
+
+.perfil__reserva-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.perfil__reserva-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.perfil__reserva-subtitle {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  font-style: italic;
+  margin-top: 0.125rem;
+}
+
+.perfil__reserva-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.perfil__reserva-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.perfil__reserva-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.perfil__reserva-value {
+  font-size: 0.85rem;
+  color: var(--color-text);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.perfil__reserva-value--mono {
+  font-family: monospace;
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (min-width: 640px) {
   .catalog__grid {

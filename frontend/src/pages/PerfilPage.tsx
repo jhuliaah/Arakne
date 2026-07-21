@@ -4,6 +4,7 @@ import RecoveryBellHost from "../components/RecoveryBellHost";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
 import {
   ensureToken,
+  getCustodiaReservaFria,
   getMe,
   getNickname,
   logout,
@@ -11,7 +12,7 @@ import {
 import { clearStoredIdentity, softLogout } from "../lib/pattern-storage";
 import { clearSharesCache } from "../lib/recovery-respond";
 import { useDelayedFlag } from "../lib/useDelayedFlag";
-import type { Usuaria } from "../types";
+import type { CustodiaReservaFria, Usuaria } from "../types";
 
 interface PerfilPageProps {
   onNavigate: (target: NavTarget) => void;
@@ -28,6 +29,39 @@ const NIVEL_LABELS: Record<number, string> = {
   2: "Artesã",
   3: "Mestra",
 };
+
+// Formatador de data pt-BR para a reserva do ateliê central.
+// Criado no escopo do módulo para não reinstanciar a cada render.
+const formatadorDataReserva = new Intl.DateTimeFormat("pt-BR", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
+
+/** Traduz o quorum "M-de-N" do backend para uma frase amigável.
+ *  Ex.: "2-de-3" → "2 de 3 assinaturas necessárias".
+ *  Disfarce: "assinaturas necessárias" = quorum multisig. */
+function formatarQuorum(quorum: string): string {
+  const m = quorum.match(/^(\d+)-de-(\d+)$/i);
+  if (m) return `${m[1]} de ${m[2]} assinaturas necessárias`;
+  // Fallback: se o formato vier diferente, mostra o cru rotulado.
+  return quorum;
+}
+
+/** Traduz o nome técnico da network para o vocabulário do ateliê.
+ *  mainnet → rede principal; demais → rede de testes. */
+function traduzirNetwork(network: string): string {
+  switch (network.toLowerCase()) {
+    case "mainnet":
+      return "rede principal";
+    case "regtest":
+    case "testnet":
+    case "signet":
+      return "rede de testes";
+    default:
+      return network;
+  }
+}
 
 export default function PerfilPage({ onNavigate, onLoggedOut }: PerfilPageProps) {
   const [usuaria, setUsuaria] = useState<Usuaria | null>(null);
@@ -56,6 +90,22 @@ export default function PerfilPage({ onNavigate, onLoggedOut }: PerfilPageProps)
       }
       setUsuaria(me);
       setLoading(false);
+    })();
+  }, []);
+
+  // Reserva do ateliê central (custódia multisig, disfarçada) —
+  // endpoint público, não exige token. Buscada em paralelo com os
+  // dados da usuária. Se falhar ou retornar null, a seção simplesmente
+  // some (não é crítica para a bancada).
+  const [custodia, setCustodia] = useState<CustodiaReservaFria | null>(null);
+  const [custodiaLoading, setCustodiaLoading] = useState(true);
+  const showCustodiaSkeleton = useDelayedFlag(custodiaLoading);
+
+  useEffect(() => {
+    (async () => {
+      const data = await getCustodiaReservaFria();
+      setCustodia(data);
+      setCustodiaLoading(false);
     })();
   }, []);
 
@@ -161,6 +211,81 @@ export default function PerfilPage({ onNavigate, onLoggedOut }: PerfilPageProps)
               </div>
             )}
           </>
+        )}
+
+        {/* Reserva do ateliê central — disfarçada de "reserva do
+            ateliê". Na verdade é a custódia multisig do fundo coletivo
+            (dados públicos: endereço, quorum, rede). Card informativo,
+            sutil — não compete com o card de nível. Se a busca falhar
+            ou retornar null, a seção some silenciosamente (não é
+            crítica para a bancada). Endpoint público, sem token. */}
+        {custodiaLoading && showCustodiaSkeleton && (
+          <div
+            className="skeleton-card"
+            aria-hidden="true"
+            style={{ padding: "0.875rem 1rem", marginBottom: "0.875rem" }}
+          >
+            <div className="skeleton skeleton--text" style={{ marginBottom: "0.5rem" }} />
+            <div
+              className="skeleton skeleton--text skeleton--short"
+              style={{ marginBottom: "0.625rem" }}
+            />
+            <div className="skeleton skeleton--bar" style={{ marginBottom: "0.5rem" }} />
+            <div className="skeleton skeleton--bar" />
+          </div>
+        )}
+        {!custodiaLoading && custodia && (
+          custodia.configurado ? (
+            <div className="perfil__reserva">
+              <div className="perfil__reserva-header">
+                <div className="perfil__reserva-title">
+                  <span className="perfil__reserva-icon" aria-hidden="true">🔐</span>
+                  Reserva do ateliê central
+                </div>
+                <div className="perfil__reserva-subtitle">
+                  Transparência do fundo coletivo
+                </div>
+              </div>
+              <dl className="perfil__reserva-list">
+                {custodia.endereco && (
+                  <div className="perfil__reserva-row">
+                    <dt className="perfil__reserva-label">Endereço</dt>
+                    <dd className="perfil__reserva-value perfil__reserva-value--mono">
+                      {custodia.endereco}
+                    </dd>
+                  </div>
+                )}
+                {custodia.quorum && (
+                  <div className="perfil__reserva-row">
+                    <dt className="perfil__reserva-label">Assinaturas</dt>
+                    <dd className="perfil__reserva-value">
+                      {formatarQuorum(custodia.quorum)}
+                    </dd>
+                  </div>
+                )}
+                {custodia.network && (
+                  <div className="perfil__reserva-row">
+                    <dt className="perfil__reserva-label">Rede</dt>
+                    <dd className="perfil__reserva-value">
+                      {traduzirNetwork(custodia.network)}
+                    </dd>
+                  </div>
+                )}
+                {custodia.criado_em && (
+                  <div className="perfil__reserva-row">
+                    <dt className="perfil__reserva-label">Desde</dt>
+                    <dd className="perfil__reserva-value">
+                      {formatadorDataReserva.format(new Date(custodia.criado_em))}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </div>
+          ) : (
+            <div className="consent-note" style={{ marginBottom: "0.875rem" }}>
+              A reserva do ateliê central ainda não foi configurada.
+            </div>
+          )
         )}
 
         {/* "Apagar conta deste dispositivo" (Mudança #5a) — disfarçado de

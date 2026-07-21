@@ -1,9 +1,18 @@
 /** API client — all fetch calls to the Arakne backend go through here. */
 
-import type { ConcluirAulaResponse, Emprestimo, IniciarAulaResponse, InscreverTrilhaResponse, LoginResponse, PagamentoResponse, PontoDeTroca, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
+import type { CobrancaPix, ConcluirAulaResponse, CustodiaReservaFria, Emprestimo, IniciarAulaResponse, InscreverTrilhaResponse, LoginResponse, PagamentoResponse, PontoDeTroca, StatusPagamentoPix, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
 import { getStoredNpub } from "./lib/pattern-storage";
 
 const API_BASE = "/api";
+
+// Conversão demo sats → BRL (1 sat = R$0,0001; 10000 sats = R$1,00).
+// Em produção, buscar cotação via API externa.
+export const SATS_TO_BRL = 0.0001;
+
+// Helper: converte sats para centavos de BRL (o backend espera centavos).
+export function satsParaCentavosBrl(sats: number): number {
+  return Math.round(sats * SATS_TO_BRL * 100);
+}
 
 // ── Storage helpers ──────────────────────────────────────────
 
@@ -729,6 +738,62 @@ export async function iniciarAula(
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+// ── Pix (Mercado Pago) e custódia multisig ──────────────────
+// Repagamento via dinheiro bancário (fora do app) e reserva fria.
+// Os endpoints Pix/custódia são públicos (não exigem Bearer), mas
+// passamos o token se houver — não custa, e o backend pode mudar.
+
+/** Gera cobrança Pix para repagar (parte de) um empréstimo.
+ *  Na UI aparece como "concluir o padrão" — nunca como fatura.
+ *  Endpoint: POST /pix/emprestimos/{id}/cobranca. */
+export async function criarCobrancaPix(
+  emprestimoId: number,
+  valorSats: number,
+  valorCentavosBrl: number
+): Promise<CobrancaPix | null> {
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const token = localStorage.getItem("arakne_token");
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch(`${API_BASE}/pix/emprestimos/${emprestimoId}/cobranca`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ valor_sats: valorSats, valor_centavos_brl: valorCentavosBrl }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Consulta status de uma cobrança Pix pelo txid (read-only no DB;
+ *  não consulta o Mercado Pago). Útil como fallback de polling se o
+ *  webhook não estiver configurado.
+ *  Endpoint: GET /pix/pagamentos/{txid}. */
+export async function getStatusPagamentoPix(txid: string): Promise<StatusPagamentoPix | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/pix/pagamentos/${txid}`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Dados públicos da custódia multisig ativa (reserva fria).
+ *  Nunca inclui chave privada — só descriptor/endereço para auditoria.
+ *  Endpoint: GET /custodia/reserva-fria. */
+export async function getCustodiaReservaFria(): Promise<CustodiaReservaFria | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/custodia/reserva-fria`);
     if (!resp.ok) return null;
     return await resp.json();
   } catch {

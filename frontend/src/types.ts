@@ -142,3 +142,47 @@ export interface IniciarAulaResponse {
   iniciada_agora: boolean;
   concluida: boolean;
 }
+
+// ── Pix (Mercado Pago) e custódia multisig ─────────────────
+// Repagamento via dinheiro bancário (fora do app) e reserva fria.
+
+// Cobrança Pix gerada pelo backend (POST /pix/emprestimos/{id}/cobranca).
+// Na UI aparece como "concluir o padrão" — nunca como fatura.
+export interface CobrancaPix {
+  txid: string;
+  mp_payment_id: string | null;
+  status: string; // "pendente" | "aprovado" | "expirado"
+  qr_code: string; // copia-e-cola (linha Pix)
+  qr_code_base64: string; // imagem QR em base64 (pode ser vazia em mock)
+  ticket_url: string;
+  valor_sats: number;
+  valor_centavos_brl: number;
+}
+
+// Status de um pagamento Pix (GET /pix/pagamentos/{txid}).
+// Consulta só o DB local — não chama o Mercado Pago.
+export interface StatusPagamentoPix {
+  id: number;
+  emprestimo_id: number;
+  txid: string;
+  status: string; // "pendente" | "aprovado" | "expirado"
+  valor_sats: number;
+  valor_centavos_brl: number;
+  criado_em: string;
+  confirmado_em: string | null;
+}
+
+// Custódia multisig (GET /custodia/reserva-fria) — união de dois schemas
+// do backend (CustodiaMultisigResponse | CustodiaMultisigVazia).
+export interface CustodiaReservaFria {
+  configurado: boolean;
+  // Presentes só se configurado=true:
+  descriptor?: string;
+  endereco?: string;
+  quorum?: string; // ex: "2-de-3"
+  total_signatarios?: number;
+  network?: string; // "regtest" | "testnet" | "signet" | "mainnet"
+  criado_em?: string;
+  // Presente só se configurado=false:
+  mensagem?: string;
+}
