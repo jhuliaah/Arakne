@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import { getIdentificador } from "../api";
 
 interface MeuQRCodePageProps {
@@ -28,7 +29,9 @@ export default function MeuQRCodePage({ onBack }: MeuQRCodePageProps) {
 
   return (
     <div className="page theme-financial">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="financial">
         <button className="financial__back" onClick={onBack} aria-label="Voltar">
           ← Voltar

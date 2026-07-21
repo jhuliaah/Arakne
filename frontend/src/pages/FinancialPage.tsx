@@ -3,6 +3,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import {
   createEmprestimo,
   ensureToken,
@@ -16,10 +17,17 @@ import {
   listarPontosDeTroca,
   setDisponibilidadePonto,
   criarTroca,
+  getMinhasTrocas,
+  confirmarTroca,
+  recusarTroca,
+  getAvalistasRecuperacao,
+  vincularMentorRecuperacao,
 } from "../api";
 import type { ConviteResponse } from "../api";
-import type { Emprestimo, PontoDeTroca, Usuaria } from "../types";
+import type { AvalistaRecuperacao } from "../api";
+import type { Emprestimo, PontoDeTroca, Troca, Usuaria } from "../types";
 import { useDelayedFlag } from "../lib/useDelayedFlag";
+import MeuCodigoQR from "../components/MeuCodigoQR";
 
 interface FinancialPageProps {
   onBack: () => void;
@@ -42,6 +50,18 @@ const TIER_LIMITS: Record<number, number> = {
   2: 15000,
   3: 40000,
 };
+
+/** Trunca um npub para exibição compacta (mesmo padrão do onboarding). */
+function truncarNpub(npub: string): string {
+  if (npub.length <= 14) return npub;
+  return `${npub.slice(0, 8)}…${npub.slice(-3)}`;
+}
+
+/** Rótulo de uma tecelã de confiança: prefere o apelido, com fallback
+ *  para npub truncado quando o apelido não existe. */
+function rotuloTecela(tec: AvalistaRecuperacao): string {
+  return tec.apelido?.trim() || truncarNpub(tec.npub_avaliadora);
+}
 
 export default function FinancialPage({
   onBack,
@@ -67,6 +87,21 @@ export default function FinancialPage({
   const [valorTroca, setValorTroca] = useState("");
   const [trocaLoading, setTrocaLoading] = useState(false);
   const [trocaMsg, setTrocaMsg] = useState<string | null>(null);
+
+  // Pedidos de troca recebidos no ateliê (quando a usuária é Fornecedora
+  // de Linha e outra tecedora pede troca com ela). Apenas pendentes.
+  const [trocasRecebidas, setTrocasRecebidas] = useState<Troca[]>([]);
+  const [trocasRecebidasLoading, setTrocasRecebidasLoading] = useState(false);
+  const [trocaActionLoading, setTrocaActionLoading] = useState<number | null>(null);
+  const [trocaActionMsg, setTrocaActionMsg] = useState<string | null>(null);
+
+  // Tecelã de confiança (avalista de recuperação vinculado depois)
+  const [tecelas, setTecelas] = useState<AvalistaRecuperacao[]>([]);
+  const [tecelasLoading, setTecelasLoading] = useState(true);
+  const [tecelaCodigo, setTecelaCodigo] = useState("");
+  const [tecelaSubmitting, setTecelaSubmitting] = useState(false);
+  const [tecelaError, setTecelaError] = useState<string | null>(null);
+  const [tecelaSuccess, setTecelaSuccess] = useState<string | null>(null);
 
   // Repayment modal state
   const [repayModal, setRepayModal] = useState<{
@@ -134,12 +169,73 @@ export default function FinancialPage({
     const pontosData = await listarPontosDeTroca(activeToken);
     if (pontosData) setPontos(pontosData);
 
+    // Se a usuária é Fornecedora de Linha, carrega os pedidos de troca
+    // pendentes recebidos no ateliê dela (papel === "ponto").
+    if (me?.disponivel_como_ponto) {
+      setTrocasRecebidasLoading(true);
+      const minhasTrocas = await getMinhasTrocas(activeToken);
+      if (minhasTrocas) {
+        const pendentes = minhasTrocas.filter(
+          (t) => t.papel === "ponto" && t.status === "pendente"
+        );
+        setTrocasRecebidas(pendentes);
+      }
+      setTrocasRecebidasLoading(false);
+    } else {
+      setTrocasRecebidas([]);
+    }
+
+    // Load tecelãs de confiança já vinculadas (avalistas de recuperação)
+    const tecelasData = await getAvalistasRecuperacao(activeToken);
+    setTecelas(tecelasData ?? []);
+    setTecelasLoading(false);
+
     setLoading(false);
   }, []);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // ── Tecelã de confiança (avalista de recuperação) ────────────
+
+  /** Recarrega apenas a lista de tecelãs vinculadas (usado após vincular
+   *  com sucesso, sem precisar recarregar a página inteira). */
+  const recarregarTecelas = useCallback(async () => {
+    const token = await ensureToken();
+    if (!token) return;
+    const lista = await getAvalistasRecuperacao(token);
+    setTecelas(lista ?? []);
+  }, []);
+
+  const handleVincularTecela = async () => {
+    const codigo = tecelaCodigo.trim();
+    if (!codigo) {
+      setTecelaError("Digite o código da tecelã que você quer convidar.");
+      return;
+    }
+    setTecelaSubmitting(true);
+    setTecelaError(null);
+    setTecelaSuccess(null);
+    try {
+      await vincularMentorRecuperacao(codigo);
+      setTecelaCodigo("");
+      setTecelaSuccess("Tecelã convidada para o seu ateliê!");
+      await recarregarTecelas();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      // Mensagem disfarçada: nunca vaza "recuperação", "chave", etc.
+      if (/n[ãa]o encontr|inv[áa]lid|inexistente|n[ãa]o existe/i.test(msg)) {
+        setTecelaError("Não encontrei essa tecelã — confira o código.");
+      } else if (/j[áa]|preenchido|slot|limite|m[áa]ximo/i.test(msg)) {
+        setTecelaError("Seu ateliê já tem uma tecelã de confiança.");
+      } else {
+        setTecelaError("Não consegui convidar essa tecelã agora. Tente de novo.");
+      }
+    } finally {
+      setTecelaSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     if (prefilledPontoIdentificador) {
@@ -194,17 +290,85 @@ export default function FinancialPage({
     }
     const troca = await criarTroca(token, pontoIdentificador, valor);
     setTrocaLoading(false);
-    if (!troca || troca.status !== "confirmada") {
-      setTrocaMsg("Não conseguimos confirmar essa troca. Verifique antes de tentar de novo.");
+    if (!troca) {
+      setTrocaMsg("Não conseguimos registrar essa troca. Tente de novo.");
       return;
     }
-    setTrocaMsg(`Troca confirmada! ${valor.toLocaleString("pt-BR")} combinados.`);
-    setValorTroca("");
-    setTrocaAlvo(null);
-    const token2 = await ensureToken();
-    if (token2) {
-      const pontosData = await listarPontosDeTroca(token2);
+    if (troca.status === "pendente") {
+      // Disfarce: "tecelã" em vez de "fornecedor/aprovação". A troca
+      // fica aguardando a tecelã confirmar no ateliê dela.
+      setTrocaMsg("Troca combinada! Aguarde a tecelã confirmar.");
+      setValorTroca("");
+      setTrocaAlvo(null);
+      return;
+    }
+    if (troca.status === "confirmada") {
+      setTrocaMsg(`Troca confirmada! ${valor.toLocaleString("pt-BR")} combinados.`);
+      setValorTroca("");
+      setTrocaAlvo(null);
+      return;
+    }
+    // Outros status (recusada, falhou) — erro disfarçado.
+    setTrocaMsg("Não conseguimos registrar essa troca. Tente de novo.");
+  };
+
+  /** Recarrega apenas a lista de pedidos de troca pendentes recebidos
+   *  no ateliê (papel === "ponto"). Usado após confirmar/recusar. */
+  const recarregarTrocasRecebidas = useCallback(async () => {
+    const token = await ensureToken();
+    if (!token) return;
+    const minhas = await getMinhasTrocas(token);
+    if (minhas) {
+      setTrocasRecebidas(
+        minhas.filter((t) => t.papel === "ponto" && t.status === "pendente")
+      );
+    }
+  }, []);
+
+  const handleConfirmarTroca = async (trocaId: number) => {
+    setTrocaActionLoading(trocaId);
+    setTrocaActionMsg(null);
+    const token = await ensureToken();
+    if (!token) {
+      setTrocaActionLoading(null);
+      setTrocaActionMsg("Não foi possível agora. Tente de novo.");
+      return;
+    }
+    try {
+      await confirmarTroca(token, trocaId);
+      setTrocaActionMsg("Troca confirmada no seu ateliê.");
+      await recarregarTrocasRecebidas();
+      // Recarrega também os pontos para atualizar o contador de trocas
+      // concluídas da usuária como Fornecedora de Linha.
+      const pontosData = await listarPontosDeTroca(token);
       if (pontosData) setPontos(pontosData);
+      // Atualiza o me para refletir trocas_como_ponto_concluidas.
+      const me = await getMe(token);
+      if (me) setUsuaria(me);
+    } catch {
+      setTrocaActionMsg("Não consegui confirmar essa troca. Tente de novo.");
+    } finally {
+      setTrocaActionLoading(null);
+    }
+  };
+
+  const handleRecusarTroca = async (trocaId: number) => {
+    setTrocaActionLoading(trocaId);
+    setTrocaActionMsg(null);
+    const token = await ensureToken();
+    if (!token) {
+      setTrocaActionLoading(null);
+      setTrocaActionMsg("Não foi possível agora. Tente de novo.");
+      return;
+    }
+    try {
+      await recusarTroca(token, trocaId);
+      setTrocaActionMsg("Troca recusada no seu ateliê.");
+      await recarregarTrocasRecebidas();
+    } catch {
+      setTrocaActionMsg("Não consegui recusar essa troca. Tente de novo.");
+    } finally {
+      setTrocaActionLoading(null);
     }
   };
 
@@ -293,7 +457,9 @@ export default function FinancialPage({
   if (loading) {
     return (
       <div className="page theme-financial">
-        <Header />
+        <Header>
+          <RecoveryBellHost />
+        </Header>
         <main className="financial">
           <button className="financial__back" onClick={onBack} aria-label="Voltar">
             ← Voltar aos padrões
@@ -320,7 +486,9 @@ export default function FinancialPage({
 
   return (
     <div className="page theme-financial">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="financial">
         <button className="financial__back" onClick={onBack} aria-label="Voltar">
           ← Voltar aos padrões
@@ -484,6 +652,62 @@ export default function FinancialPage({
           </div>
         )}
 
+        {/* Pedidos de troca no ateliê — só visível para Fornecedoras de
+            Linha. Disfarce crochê: "pedidos de troca no ateliê", "tecelã",
+            sem "fornecedor/aprovação/transação financeira". */}
+        {usuaria?.disponivel_como_ponto && (
+          <div className="financial__invite">
+            <h3 className="financial__history-title">Pedidos de troca no ateliê</h3>
+            <p className="financial__invite-text">
+              Tecedoras que pediram troca de fio com você.
+            </p>
+
+            {trocaActionMsg && <p className="field__hint">{trocaActionMsg}</p>}
+
+            {trocasRecebidasLoading ? (
+              <p className="field__hint">Procurando pedidos no seu ateliê…</p>
+            ) : trocasRecebidas.length === 0 ? (
+              <p className="field__hint">Nenhum pedido de troca no momento.</p>
+            ) : (
+              <ul className="financial__list">
+                {trocasRecebidas.map((t) => (
+                  <li key={t.id} className="financial__list-item">
+                    <div className="financial__list-info">
+                      <span className="financial__list-name">
+                        {t.contraparte_identificador.slice(0, 8)}…
+                      </span>
+                      <span className="financial__list-date">
+                        {new Date(t.criado_em).toLocaleDateString("pt-BR")}
+                      </span>
+                    </div>
+                    <div className="financial__list-right">
+                      <span className="financial__list-amount">
+                        {t.valor_sats.toLocaleString("pt-BR")} novelo(s)
+                      </span>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button
+                          className="financial__btn financial__btn--small"
+                          onClick={() => handleConfirmarTroca(t.id)}
+                          disabled={trocaActionLoading !== null}
+                        >
+                          {trocaActionLoading === t.id ? "..." : "Confirmar"}
+                        </button>
+                        <button
+                          className="financial__btn financial__btn--small financial__btn--secondary"
+                          onClick={() => handleRecusarTroca(t.id)}
+                          disabled={trocaActionLoading !== null}
+                        >
+                          Recusar
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {/* Fornecedoras de Linha (Ponto de Troca) — nível 1+ */}
         <div className="financial__invite">
           <h3 className="financial__history-title">Fornecedoras de Linha</h3>
@@ -514,6 +738,15 @@ export default function FinancialPage({
                 tecedoras trocarem fio com você).
               </span>
             </label>
+          )}
+
+          {/* Contador de trocas concluídas no ateliê (disfarçado de
+              "trocas concluídas no seu ateliê"). Veio da bancada do
+              PerfilPage — vive aqui, na camada financeira. */}
+          {usuaria?.disponivel_como_ponto && (
+            <p className="field__hint" style={{ marginBottom: "0.75rem" }}>
+              {usuaria.trocas_como_ponto_concluidas} trocas concluídas no seu ateliê.
+            </p>
           )}
 
           {pontos.length === 0 ? (
@@ -565,6 +798,80 @@ export default function FinancialPage({
               </button>
             </div>
           )}
+        </div>
+
+        {/* Tecelã de confiança — disfarçado como "ateliê". Permite
+            vincular uma tecelã de confiança (avalista de recuperação)
+            depois do cadastro, via codigo_indicacao dela. Se a usuária
+            já tem tecelã vinculada, mostra a lista e bloqueia novas
+            vinculações (o backend rejeita slot preenchido). */}
+        <div className="financial__invite">
+          <h3 className="financial__history-title">Tecelã de confiança</h3>
+
+          {tecelasLoading ? (
+            <p className="field__hint">Procurando tecelãs do seu ateliê…</p>
+          ) : tecelas.length > 0 ? (
+            <>
+              <p className="financial__invite-text">
+                Sua tecelã de confiança está pronta para ajudar quando precisar.
+              </p>
+              <ul className="financial__list">
+                {tecelas.map((t) => (
+                  <li key={t.id} className="financial__list-item">
+                    <div className="financial__list-info">
+                      <span className="financial__list-name">{rotuloTecela(t)}</span>
+                      <span className="financial__list-date">Tecelã do ateliê</span>
+                    </div>
+                    <span className="financial__list-badge">🧶</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <>
+              <p className="financial__invite-text">
+                Convide uma tecelã experiente para fazer parte do seu ateliê —
+                ela poderá te dar uma mão quando um padrão travar.
+              </p>
+              <div className="field" style={{ marginBottom: "0.5rem" }}>
+                <label className="field__label" htmlFor="tecelaCodigo">
+                  Código da tecelã
+                </label>
+                <input
+                  id="tecelaCodigo"
+                  className="field__input"
+                  type="text"
+                  placeholder="Cole aqui o código que ela te passou"
+                  value={tecelaCodigo}
+                  onChange={(e) => setTecelaCodigo(e.target.value)}
+                  disabled={tecelaSubmitting}
+                />
+              </div>
+              {tecelaError && <p className="field__error">{tecelaError}</p>}
+              {tecelaSuccess && <p className="field__hint">{tecelaSuccess}</p>}
+              <button
+                className="financial__btn financial__btn--small"
+                onClick={handleVincularTecela}
+                disabled={tecelaSubmitting || !tecelaCodigo.trim()}
+              >
+                {tecelaSubmitting ? "Convidando…" : "Convidar tecelã para o ateliê"}
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Meu código de Ponto de Troca (Mudança #6) — QR do
+            identificador da usuária, para outra tecedora escanear em
+            vez de digitar à mão. Saiu do PerfilPage (camada crochê) e
+            passou a viver aqui, na camada financeira — o QR de
+            Fornecedora de Linha não pertence à bancada crochê. */}
+        <div className="financial__invite">
+          <h3 className="financial__history-title">Meu código de Ponto de Troca</h3>
+          <p className="financial__invite-text">
+            Mostre este código para outra tecedora escanear, em vez de
+            digitar seu identificador na mão.
+          </p>
+          <MeuCodigoQR compact />
         </div>
 
         {/* Pattern progress */}

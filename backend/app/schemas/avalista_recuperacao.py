@@ -48,6 +48,7 @@ class AvalistaRecuperacaoOut(BaseModel):
     id: int
     usuaria_id: int
     npub_avaliadora: str
+    apelido: Optional[str] = None
     ordem: int
     is_shadow: bool
     criado_em: datetime

@@ -105,7 +105,7 @@ class MercadoPagoPixService:
                         # Mercado Pago exige um payer com e-mail; como não
                         # guardamos identidade real, usamos um e-mail
                         # sintético por txid (não é usado pra contato).
-                        "payer": {"email": f"{txid}@arakne.invalid"},
+                        "payer": {"email": f"{txid}@example.com"},
                     },
                 )
                 resp.raise_for_status()

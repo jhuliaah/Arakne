@@ -18,9 +18,10 @@
 
 import { useState } from "react";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
 import HexPatternCanvas from "../components/HexPatternCanvas";
-import { concluirAula, generatePin, criarConta, markUnlockedThisSession } from "../api";
+import { concluirAula, generatePin, criarConta, markUnlockedThisSession, iniciarAula } from "../api";
 import {
   hasStoredIdentity,
   createAndStoreIdentity,
@@ -61,6 +62,12 @@ export default function AulaPage({
   const [concluida, setConcluida] = useState(aula.concluida);
   const [submitting, setSubmitting] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  // Estado de "Começar aula" (BUG 3): se a aula ainda não foi iniciada
+  // (ProgressoAula não existe), mostramos o botão "Começar aula" que
+  // chama `iniciarAula`. Se já foi iniciada (mas não concluída), mostra
+  // "Aula em andamento". Se concluída, nem mostra.
+  const [iniciando, setIniciando] = useState(false);
+  const [iniciada, setIniciada] = useState(aula.concluida);
 
   // Estado do portal (trilha #9 aula 1 nível 1).
   const [patternError, setPatternError] = useState(false);
@@ -186,7 +193,9 @@ export default function AulaPage({
 
     return (
       <div className="page">
-        <Header />
+        <Header>
+          <RecoveryBellHost />
+        </Header>
         <main className="catalog">
           <button className="financial__back" onClick={onBack} aria-label="Voltar">
             ← Voltar
@@ -243,6 +252,23 @@ export default function AulaPage({
     setConcluida(true);
     // Small delay so the user sees the confirmation before navigating back.
     setTimeout(() => onConcluida(), 800);
+  }
+
+  // "Começar aula" (BUG 3): cria ProgressoAula para esta aula. Se já
+  // foi iniciada (idempotente), o backend retorna `iniciada_agora=false`
+  // — não é erro. Após iniciar, marca `iniciada=true` para esconder o
+  // botão e mostrar "Aula em andamento".
+  async function handleIniciar() {
+    if (iniciando || iniciada || concluida) return;
+    setIniciando(true);
+    setErro(null);
+    const resp = await iniciarAula(aula.id);
+    setIniciando(false);
+    if (resp === null) {
+      setErro("Não foi possível começar a aula. Tente novamente.");
+      return;
+    }
+    setIniciada(true);
   }
 
   return (
@@ -329,6 +355,25 @@ export default function AulaPage({
           <div className="financial__error">
             <p>{erro}</p>
           </div>
+        )}
+
+        {/* "Começar aula" (BUG 3): se a aula não foi iniciada nem
+            concluída, mostra o botão para criar o ProgressoAula. Se já
+            iniciada (mas não concluída), mostra "Aula em andamento". */}
+        {!concluida && !iniciada && (
+          <button
+            className="btn btn--secondary aula__iniciar"
+            onClick={handleIniciar}
+            disabled={iniciando || submitting}
+            style={{ marginBottom: "0.75rem" }}
+          >
+            {iniciando ? "Começando..." : "Começar aula"}
+          </button>
+        )}
+        {!concluida && iniciada && (
+          <p className="field__hint" style={{ marginBottom: "0.75rem" }}>
+            ✓ Aula em andamento
+          </p>
         )}
 
         {/* Concluir */}

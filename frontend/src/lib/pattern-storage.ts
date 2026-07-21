@@ -42,8 +42,33 @@ const STORAGE_KEYS = {
  */
 const LS_FAILED_ATTEMPTS = "arakne_failed_attempts";
 
+/**
+ * Timestamp (ms) até quando o desbloqueio fica bloqueado (§5.2 —
+ * "pernas da aranha"). Após 8 tentativas falhas consecutivas, o
+ * desbloqueio é bloqueado por um tempo crescente (1min, 5min, 15min,
+ * 1h, ...) para dificultar brute-force do padrão. Persistido em
+ * localStorage para sobreviver a recargas/fechamento do app.
+ */
+const LS_LOCKOUT_UNTIL = "arakne_lockout_until";
+
 /** Limite de tentativas (8 = "pernas da aranha"). §5.2 do documento mestre. */
 export const MAX_ATTEMPTS = 8;
+
+/** Escala de bloqueio exponencial (ms) após cada ciclo de 8 falhas.
+ *  1min → 5min → 15min → 1h → 4h → 24h. Disfarçada de "a aranha está
+ *  tecendo" na UI. */
+const LOCKOUT_STEPS_MS = [
+  60_000, // 1 minuto
+  5 * 60_000, // 5 minutos
+  15 * 60_000, // 15 minutos
+  60 * 60_000, // 1 hora
+  4 * 60 * 60_000, // 4 horas
+  24 * 60 * 60_000, // 24 horas (teto)
+];
+
+/** Mensagem disfarçada exibida durante o bloqueio (§5.2). */
+export const LOCKOUT_MESSAGE =
+  "A aranha está tecendo... aguarde um pouco antes de tentar de novo.";
 
 /** Lê o contador de tentativas falhas (0 se ausente). */
 export function getFailedAttempts(): number {
@@ -53,21 +78,57 @@ export function getFailedAttempts(): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** Incrementa e retorna o novo contador de tentativas falhas. */
+/** Incrementa e retorna o novo contador de tentativas falhas.
+ *  Ao atingir MAX_ATTEMPTS, aplica o próximo passo da escala de
+ *  bloqueio (LOCKOUT_STEPS_MS) e grava o timestamp de desbloqueio em
+ *  `LS_LOCKOUT_UNTIL`. */
 export function incrementFailedAttempts(): number {
   const next = getFailedAttempts() + 1;
   localStorage.setItem(LS_FAILED_ATTEMPTS, String(next));
+  if (next >= MAX_ATTEMPTS) {
+    // Quantos ciclos completos de MAX_ATTEMPTS já aconteceram desde o
+    // último reset. Cada ciclo avança um passo na escala de bloqueio.
+    const ciclos = Math.floor((next - 1) / MAX_ATTEMPTS);
+    const step = Math.min(ciclos, LOCKOUT_STEPS_MS.length - 1);
+    const duracao = LOCKOUT_STEPS_MS[step];
+    localStorage.setItem(LS_LOCKOUT_UNTIL, String(Date.now() + duracao));
+  }
   return next;
 }
 
 /** Zera o contador de tentativas falhas (login/cadastro/recuperação OK). */
 export function resetFailedAttempts(): void {
   localStorage.setItem(LS_FAILED_ATTEMPTS, "0");
+  localStorage.removeItem(LS_LOCKOUT_UNTIL);
 }
 
 /** Retorna true se o Ponto Arakne está travado (tentativas >= MAX_ATTEMPTS). */
 export function isLockedOut(): boolean {
   return getFailedAttempts() >= MAX_ATTEMPTS;
+}
+
+/**
+ * Retorna true se o desbloqueio está bloqueado por tempo (§5.2 — após
+ * atingir MAX_ATTEMPTS, o desbloqueio fica indisponível por um tempo
+ * crescente). A UI deve checar isto antes de aceitar um desenho e
+ * exibir a mensagem disfarçada `LOCKOUT_MESSAGE`.
+ */
+export function isLockedOutByTime(): boolean {
+  const raw = localStorage.getItem(LS_LOCKOUT_UNTIL);
+  if (raw === null) return false;
+  const until = Number.parseInt(raw, 10);
+  if (!Number.isFinite(until) || until <= 0) return false;
+  return Date.now() < until;
+}
+
+/** Retorna quantos milissegundos faltam para o bloqueio acabar (0 se
+ *  expirou ou não há bloqueio). Útil para a UI mostrar um countdown. */
+export function getLockoutRemainingMs(): number {
+  const raw = localStorage.getItem(LS_LOCKOUT_UNTIL);
+  if (raw === null) return 0;
+  const until = Number.parseInt(raw, 10);
+  if (!Number.isFinite(until) || until <= 0) return 0;
+  return Math.max(0, until - Date.now());
 }
 
 /**
@@ -147,12 +208,41 @@ export function getStoredNpub(): string | null {
 }
 
 /**
- * Limpa tudo (logout/reset).
+ * Limpa tudo (logout/reset real — "apagar conta deste dispositivo").
+ * Remove a identidade Nostr persistida (nsec criptografado, hash do
+ * padrão, npub). Use quando a usuária quer desfazer a conta neste
+ * aparelho. Para "sair" sem apagar a identidade, use `softLogout`.
  */
 export function clearStoredIdentity(): void {
   localStorage.removeItem(STORAGE_KEYS.nsecEncrypted);
   localStorage.removeItem(STORAGE_KEYS.patternHash);
   localStorage.removeItem(STORAGE_KEYS.npub);
+}
+
+/**
+ * "Sair" sem apagar a identidade (§5 — Mudança #5a).
+ *
+ * Limpa apenas o estado de SESSÃO (nsec destravado em memória, flag de
+ * sessão desbloqueada, contador de tentativas falhas e timestamp de
+ * bloqueio do §5.2), mas MANTÉM a identidade persistida no localStorage
+ * (`arakne_nsec_encrypted`, `arakne_pattern_hash`, `arakne_npub`).
+ *
+ * Assim a usuária pode "sair" sem perder o acesso à conta — basta
+ * desenhar o Ponto Arakne de novo para voltar. O "apagar conta" real
+ * (que remove a identidade persistida) é uma ação separada, com
+ * confirmação dupla, em `clearStoredIdentity`.
+ *
+ * Nota: o token de sessão do backend e o PIN guardado em localStorage
+ * (necessários para `ensureToken` das telas financeiras) são limpos
+ * pela função `logout()` em `api.ts`, que NÃO toca nas três keys de
+ * identidade Nostr — esta função cuida só do lado Nostr/padrão.
+ */
+export function softLogout(): void {
+  // Limpa o contador de tentativas falhas e o bloqueio do §5.2 — ao
+  // "sair", a próxima tentativa de desbloqueio começa sem lockout
+  // residual (a dona pode ter travado antes de sair).
+  resetFailedAttempts();
+  localStorage.removeItem(LS_LOCKOUT_UNTIL);
 }
 
 /**

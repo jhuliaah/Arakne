@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.conversao_pool import ConversaoPool
 from app.models.emprestimo import Emprestimo
 from app.models.pagamento_pix import PagamentoPix
 from app.schemas.pix import (
@@ -27,6 +28,8 @@ from app.schemas.pix import (
     PagamentoPixResponse,
     WebhookPixResponse,
 )
+from app.services.exchange import BinanceError, exchange
+from app.services.lnbits import lnbits
 from app.services.pix import MercadoPagoPixError, pix
 from app.services.risco import ao_quitar
 
@@ -129,6 +132,75 @@ def _confirmar_pagamento(pagamento: PagamentoPix, db: Session) -> None:
         ao_quitar(usuaria)
         emprestimo.status = "quitado"
         emprestimo.quitado_em = datetime.utcnow()
+
+    db.commit()
+
+    # A partir daqui a dívida da usuária já está quitada e commitada — o que
+    # segue é só o "passo 4" (BRL→sats de volta pro pool). Roda numa etapa
+    # separada, deliberadamente: uma falha aqui (Binance fora do ar, saldo
+    # insuficiente, etc.) NUNCA pode reverter nem atrasar a confirmação dela.
+    _depositar_no_pool(pagamento, db)
+
+
+def _depositar_no_pool(pagamento: PagamentoPix, db: Session) -> None:
+    """Converte o BRL recebido em sats e credita a wallet-pool via Lightning.
+
+    Decisão de denominação: o valor SACADO da corretora e depositado no pool
+    é fixado em `pagamento.valor_sats` (o que foi de fato abatido da dívida
+    dela) — não em "quanto BTC o valor_brl comprou". Se o preço do BTC
+    variou entre o repagamento dela e essa conversão, o fundo absorve a
+    diferença — mesmo princípio já registrado na seção 9 do doc mestre
+    (proteção cambial do empréstimo: "a diferença é absorvida pelo fundo,
+    não pela mutuária"), só que do lado do repagamento em vez do empréstimo.
+    """
+    conversao = ConversaoPool(
+        pagamento_pix_id=pagamento.id,
+        valor_centavos_brl=pagamento.valor_centavos_brl,
+        status="pendente",
+    )
+    db.add(conversao)
+    db.commit()
+    db.refresh(conversao)
+
+    try:
+        compra = exchange.comprar_btc_mercado(pagamento.valor_centavos_brl / 100)
+        conversao.binance_order_id = compra["order_id"]
+        conversao.quantidade_btc = compra["quantidade_btc"]
+        conversao.preco_medio_brl = compra["preco_medio"]
+
+        invoice = lnbits.create_invoice(
+            lnbits.pool_key,
+            amount_sats=pagamento.valor_sats,
+            memo=f"conversao-{pagamento.txid}",
+        )
+
+        valor_btc_saque = pagamento.valor_sats / 100_000_000
+        saque = exchange.sacar_lightning(
+            invoice=invoice["payment_request"], valor_btc=valor_btc_saque
+        )
+        conversao.binance_withdraw_id = saque["withdraw_id"]
+        conversao.status = "concluida"
+        conversao.concluido_em = datetime.utcnow()
+    except BinanceError as e:
+        logger.error(
+            "Conversão BRL→sats falhou pro pagamento %s (dívida da usuária já "
+            "quitada, isso é só pendência de reconciliação): %s",
+            pagamento.txid,
+            e,
+        )
+        conversao.status = "falhou"
+        conversao.erro = str(e)
+    except Exception as e:
+        # Qualquer outra falha inesperada — nunca deixa propagar e derrubar
+        # o webhook (a resposta ao Mercado Pago precisa ser 200 de qualquer
+        # jeito, o repagamento dela já foi confirmado antes desta função).
+        logger.error(
+            "Conversão BRL→sats falhou de forma inesperada pro pagamento %s: %s",
+            pagamento.txid,
+            e,
+        )
+        conversao.status = "falhou"
+        conversao.erro = str(e)
 
     db.commit()
 

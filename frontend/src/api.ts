@@ -1,6 +1,6 @@
 /** API client — all fetch calls to the Arakne backend go through here. */
 
-import type { ConcluirAulaResponse, Emprestimo, LoginResponse, PagamentoResponse, PontoDeTroca, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
+import type { ConcluirAulaResponse, Emprestimo, IniciarAulaResponse, InscreverTrilhaResponse, LoginResponse, PagamentoResponse, PontoDeTroca, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
 import { getStoredNpub } from "./lib/pattern-storage";
 
 const API_BASE = "/api";
@@ -105,11 +105,17 @@ export function generatePin(): string {
 
 // ── API calls ───────────────────────────────────────────────
 
-export async function createUsuaria(pin: string, codigoIndicacao?: string, npub?: string): Promise<Usuaria | null> {
+export async function createUsuaria(
+  pin: string,
+  codigoIndicacao?: string,
+  npub?: string,
+  apelido?: string,
+): Promise<Usuaria | null> {
   try {
     const body: Record<string, string> = { pin };
     if (codigoIndicacao) body.codigo_indicacao = codigoIndicacao;
     if (npub) body.npub = npub;
+    if (apelido) body.apelido = apelido;
     const resp = await fetch(`${API_BASE}/usuarias`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -176,6 +182,26 @@ export async function updateNpub(token: string, npub: string): Promise<Usuaria |
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ npub }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Atualiza o apelido da usuária logada via PATCH /usuarias/me/apelido
+ *  (Mudança #7-frontend). A Lane A adiciona o endpoint no backend.
+ *  Retorna a usuária atualizada, ou null em falha. */
+export async function updateApelido(token: string, apelido: string): Promise<Usuaria | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/usuarias/me/apelido`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ apelido }),
     });
     if (!resp.ok) return null;
     return await resp.json();
@@ -312,12 +338,47 @@ export async function getMinhasTrocas(token: string): Promise<Troca[] | null> {
   }
 }
 
+/** Tecelã confirma um pedido de troca recebido no ateliê dela.
+ *  Endpoint: POST /trocas/{id}/confirmar (Bearer required).
+ *  Lança Error com mensagem pronta para a UI em caso de falha. */
+export async function confirmarTroca(token: string, trocaId: number): Promise<Troca> {
+  const res = await fetch(`${API_BASE}/trocas/${trocaId}/confirmar`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Erro ${res.status} ao confirmar troca`);
+  }
+  return res.json();
+}
+
+/** Tecelã recusa um pedido de troca recebido no ateliê dela.
+ *  Endpoint: POST /trocas/{id}/recusar (Bearer required).
+ *  Lança Error com mensagem pronta para a UI em caso de falha. */
+export async function recusarTroca(token: string, trocaId: number): Promise<Troca> {
+  const res = await fetch(`${API_BASE}/trocas/${trocaId}/recusar`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Erro ${res.status} ao recusar troca`);
+  }
+  return res.json();
+}
+
 // ── Avalistas de recuperação (social backup via Nostr) ───────
 
 /** Avalista de recuperação retornado pelo backend: cada uma das 3
  *  tecelãs de confiança que guardam um shard do nsec da dona. O campo
  *  `is_shadow` marca as tecelãs-sombra (placeholder com npub gerado
- *  automaticamente quando a dona não indicou ninguém). */
+ *  automaticamente quando a dona não indicou ninguém).
+ *
+ *  `apelido` (Mudança #7-frontend) — apelido da tecelã, retornado pelo
+ *  backend (Lane A) quando disponível. Pode ser null/ausente se a
+ *  tecelã ainda não definiu apelido; a UI faz fallback para npub
+ *  truncado. */
 export interface AvalistaRecuperacao {
   id: number;
   usuaria_id: number;
@@ -325,6 +386,7 @@ export interface AvalistaRecuperacao {
   ordem: number;
   is_shadow: boolean;
   criado_em: string;
+  apelido?: string | null;
 }
 
 /** Busca os 3 avalistas de recuperação da usuária logada.
@@ -343,6 +405,32 @@ export async function getAvalistasRecuperacao(
     return data.avalistas;
   } catch {
     return null;
+  }
+}
+
+/** Vincula uma tecelã de confiança (avalista de recuperação) usando o
+ *  codigo_indicacao dela — fluxo "vincular depois" para usuárias que
+ *  se cadastraram sem convite ou cuja convidadora não tinha npub na época.
+ *  Endpoint: POST /usuarias/me/avalistas-recuperacao.
+ *  Lança Error com mensagem pronta para a UI em caso de falha. */
+export async function vincularMentorRecuperacao(
+  codigoIndicacao: string
+): Promise<void> {
+  const token = await ensureToken();
+  if (!token) {
+    throw new Error("Não foi possível vincular a tecelã agora. Tente de novo.");
+  }
+  const res = await fetch(`${API_BASE}/usuarias/me/avalistas-recuperacao`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ codigo_indicacao: codigoIndicacao }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Erro ${res.status} ao vincular tecelã`);
   }
 }
 
@@ -498,12 +586,13 @@ export async function recuperarConta(
 export async function criarConta(
   pin: string,
   inviteCodigo?: string | null,
-  npub?: string
+  npub?: string,
+  apelido?: string,
 ): Promise<Usuaria | null> {
   // Se o caller não passou npub explicitamente, tenta ler do localStorage
   // (a identidade Nostr já deve ter sido criada por createAndStoreIdentity).
   const npubFinal = npub ?? getStoredNpub() ?? undefined;
-  const usuaria = await createUsuaria(pin, inviteCodigo ?? undefined, npubFinal);
+  const usuaria = await createUsuaria(pin, inviteCodigo ?? undefined, npubFinal, apelido);
   if (!usuaria) return null;
 
   setIdentificador(usuaria.identificador);
@@ -512,6 +601,13 @@ export async function criarConta(
   // Login imediato para obter token (mantém ensureToken funcionando).
   const loginResp = await login(usuaria.identificador, pin);
   if (loginResp) setToken(loginResp.token);
+
+  // Se o backend não aceitou `apelido` no POST (schema antigo), tenta
+  // novamente via PATCH /usuarias/me/apelido (best-effort — não falha
+  // a criação da conta se o endpoint ainda não existir).
+  if (apelido && loginResp) {
+    await updateApelido(loginResp.token, apelido);
+  }
 
   if (inviteCodigo) {
     markAvalCreated(inviteCodigo);
@@ -573,6 +669,63 @@ export async function concluirAula(aulaId: number): Promise<ConcluirAulaResponse
     const token = await ensureToken();
     if (!token) return null;
     const resp = await fetch(`${API_BASE}/trilhas/aulas/${aulaId}/concluir`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Inscreve a usuária logada em todas as aulas de uma trilha (BUG 3).
+ *  Cria ProgressoAula(concluida=False) para cada aula sem registro prévio.
+ *  Idempotente — inscrever de novo não duplica nem erro.
+ *  Endpoint: POST /trilhas/{trilhaId}/inscrever (Bearer required). */
+export async function inscreverTrilha(
+  trilhaId: number,
+): Promise<InscreverTrilhaResponse | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/trilhas/${trilhaId}/inscrever`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Lista as trilhas onde a usuária logada tem ≥1 ProgressoAula (inscrita
+ *  ou concluída). Mesmo schema `TrilhaOut` do `GET /trilhas`.
+ *  Endpoint: GET /trilhas/me (Bearer required). */
+export async function listarMinhasTrilhas(): Promise<Trilha[] | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/trilhas/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Inicia uma aula específica (cria ProgressoAula para ela). Idempotente.
+ *  Endpoint: POST /trilhas/aulas/{aulaId}/iniciar (Bearer required). */
+export async function iniciarAula(
+  aulaId: number,
+): Promise<IniciarAulaResponse | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/trilhas/aulas/${aulaId}/iniciar`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });

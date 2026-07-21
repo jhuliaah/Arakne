@@ -1,0 +1,585 @@
+diff --git a/.env.example b/.env.example
+index 2c0e2af..66500ab 100644
+--- a/.env.example
++++ b/.env.example
+@@ -14,6 +14,14 @@ MP_WEBHOOK_URL=
+ # doc mestre — disfarce financeiro no rail brasileiro).
+ PIX_NOME_RECEBEDOR="Ateliê Fio de Ouro Materiais Artesanais"
+ 
++# Binance — conversão BRL→sats de volta pro pool após repagamento Pix
++# confirmado (o "passo 4" do ciclo). Leave empty to use mock mode (não
++# compra/saca nada de verdade). Gerar em https://www.binance.com/pt-BR/my/settings/api-management
++# — a chave precisa de permissão "Enable Spot & Margin Trading" (pra comprar
++# BTC) e "Enable Withdrawals" (pra sacar via Lightning).
++BINANCE_API_KEY=
++BINANCE_API_SECRET=
++
+ # Custódia compartilhada — preenchido a partir da saída de
+ # scripts/gerar_multisig.py. Referência de leitura só; o backend nunca
+ # guarda chave privada de steward.
+diff --git a/backend/app/config.py b/backend/app/config.py
+index 86c4431..e70e596 100644
+--- a/backend/app/config.py
++++ b/backend/app/config.py
+@@ -37,6 +37,16 @@ MP_WEBHOOK_URL = os.getenv("MP_WEBHOOK_URL", "")
+ # acima, não deste texto.
+ PIX_NOME_RECEBEDOR = os.getenv("PIX_NOME_RECEBEDOR", "Ateliê Fio de Ouro Materiais Artesanais")
+ 
++# ── Binance (conversão BRL → sats de volta pro pool) ────────
++# Fecha o ciclo: quando o repagamento Pix confirma, o BRL que caiu na conta
++# Mercado Pago precisa virar sats de volta no fundo Lightning, senão o pool
++# fica permanentemente mais pobre a cada empréstimo. Vazio por padrão →
++# modo mock (não compra/saca nada de verdade), mesmo padrão do LNbits/Pix.
++# Ver seção 18 do doc mestre (addendum) pro racional de escolha da Binance.
++BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
++BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
++BINANCE_API_URL = os.getenv("BINANCE_API_URL", "https://api.binance.com")
++
+ # ── Custódia compartilhada (reserva fria multisig) ──────────
+ # Preenchido depois de rodar scripts/gerar_multisig.py. Isto é só referência
+ # de leitura (descriptor + endereço público) — o backend nunca guarda chave
+diff --git a/backend/app/main.py b/backend/app/main.py
+index 8613587..537348c 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -21,6 +21,7 @@ from app.models import (  # noqa: F401 — import so tables are registered
+     RecoveryShareBackup,
+     PagamentoPix,
+     CustodiaMultisig,
++    ConversaoPool,
+ )
+ from app.routers import (
+     avais,
+diff --git a/backend/app/models/__init__.py b/backend/app/models/__init__.py
+index a1cc95d..1d5187c 100644
+--- a/backend/app/models/__init__.py
++++ b/backend/app/models/__init__.py
+@@ -16,6 +16,7 @@ from app.models.progresso_aula import ProgressoAula  # noqa: F401
+ from app.models.recovery_share_backup import RecoveryShareBackup  # noqa: F401
+ from app.models.pagamento_pix import PagamentoPix  # noqa: F401
+ from app.models.custodia import CustodiaMultisig  # noqa: F401
++from app.models.conversao_pool import ConversaoPool  # noqa: F401
+ 
+ __all__ = [
+     "Base",
+@@ -34,4 +35,5 @@ __all__ = [
+     "RecoveryShareBackup",
+     "PagamentoPix",
+     "CustodiaMultisig",
++    "ConversaoPool",
+ ]
+diff --git a/backend/app/models/conversao_pool.py b/backend/app/models/conversao_pool.py
+new file mode 100644
+index 0000000..75309f4
+--- /dev/null
++++ b/backend/app/models/conversao_pool.py
+@@ -0,0 +1,43 @@
++"""ConversaoPool model — registro de cada conversão BRL→sats que credita o
++fundo (pool) Lightning após um repagamento Pix confirmado.
++
++Existe pra auditoria e reconciliação, não pra controle de fluxo: o
++repagamento da usuária (PagamentoPix) já foi confirmado e a dívida dela já
++foi abatida ANTES dessa conversão rodar — se a compra/saque na Binance
++falhar (rede fora, saldo insuficiente, limite de saque, etc.), isso nunca
++reverte o repagamento dela. Esta tabela é onde a gente rastreia se o
++dinheiro de fato voltou pro fundo, pra reconciliar manualmente quando
++`status` ficar em "falhou".
++"""
++
++from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, func
++from sqlalchemy.orm import relationship
++
++from app.models.base import Base
++
++
++class ConversaoPool(Base):
++    __tablename__ = "conversoes_pool"
++
++    id = Column(Integer, primary_key=True, index=True)
++    pagamento_pix_id = Column(Integer, ForeignKey("pagamentos_pix.id"), nullable=False)
++
++    valor_centavos_brl = Column(Integer, nullable=False)
++    quantidade_btc = Column(Float, nullable=True)
++    preco_medio_brl = Column(Float, nullable=True)
++    binance_order_id = Column(String, nullable=True)
++    binance_withdraw_id = Column(String, nullable=True)
++
++    status = Column(String, default="pendente", nullable=False)  # pendente | concluida | falhou
++    erro = Column(String, nullable=True)  # detalhe da falha, se status == "falhou"
++
++    criado_em = Column(DateTime, server_default=func.now(), nullable=False)
++    concluido_em = Column(DateTime, nullable=True)
++
++    pagamento_pix = relationship("PagamentoPix", backref="conversao_pool")
++
++    def __repr__(self) -> str:
++        return (
++            f"<ConversaoPool id={self.id} status='{self.status}' "
++            f"quantidade_btc={self.quantidade_btc}>"
++        )
+diff --git a/backend/app/routers/pix.py b/backend/app/routers/pix.py
+index de9ad1e..fccc2bd 100644
+--- a/backend/app/routers/pix.py
++++ b/backend/app/routers/pix.py
+@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
+ from sqlalchemy.orm import Session
+ 
+ from app.database import get_db
++from app.models.conversao_pool import ConversaoPool
+ from app.models.emprestimo import Emprestimo
+ from app.models.pagamento_pix import PagamentoPix
+ from app.schemas.pix import (
+@@ -27,6 +28,8 @@ from app.schemas.pix import (
+     PagamentoPixResponse,
+     WebhookPixResponse,
+ )
++from app.services.exchange import BinanceError, exchange
++from app.services.lnbits import lnbits
+ from app.services.pix import MercadoPagoPixError, pix
+ from app.services.risco import ao_quitar
+ 
+@@ -132,6 +135,75 @@ def _confirmar_pagamento(pagamento: PagamentoPix, db: Session) -> None:
+ 
+     db.commit()
+ 
++    # A partir daqui a dívida da usuária já está quitada e commitada — o que
++    # segue é só o "passo 4" (BRL→sats de volta pro pool). Roda numa etapa
++    # separada, deliberadamente: uma falha aqui (Binance fora do ar, saldo
++    # insuficiente, etc.) NUNCA pode reverter nem atrasar a confirmação dela.
++    _depositar_no_pool(pagamento, db)
++
++
++def _depositar_no_pool(pagamento: PagamentoPix, db: Session) -> None:
++    """Converte o BRL recebido em sats e credita a wallet-pool via Lightning.
++
++    Decisão de denominação: o valor SACADO da corretora e depositado no pool
++    é fixado em `pagamento.valor_sats` (o que foi de fato abatido da dívida
++    dela) — não em "quanto BTC o valor_brl comprou". Se o preço do BTC
++    variou entre o repagamento dela e essa conversão, o fundo absorve a
++    diferença — mesmo princípio já registrado na seção 9 do doc mestre
++    (proteção cambial do empréstimo: "a diferença é absorvida pelo fundo,
++    não pela mutuária"), só que do lado do repagamento em vez do empréstimo.
++    """
++    conversao = ConversaoPool(
++        pagamento_pix_id=pagamento.id,
++        valor_centavos_brl=pagamento.valor_centavos_brl,
++        status="pendente",
++    )
++    db.add(conversao)
++    db.commit()
++    db.refresh(conversao)
++
++    try:
++        compra = exchange.comprar_btc_mercado(pagamento.valor_centavos_brl / 100)
++        conversao.binance_order_id = compra["order_id"]
++        conversao.quantidade_btc = compra["quantidade_btc"]
++        conversao.preco_medio_brl = compra["preco_medio"]
++
++        invoice = lnbits.create_invoice(
++            lnbits.pool_key,
++            amount_sats=pagamento.valor_sats,
++            memo=f"conversao-{pagamento.txid}",
++        )
++
++        valor_btc_saque = pagamento.valor_sats / 100_000_000
++        saque = exchange.sacar_lightning(
++            invoice=invoice["payment_request"], valor_btc=valor_btc_saque
++        )
++        conversao.binance_withdraw_id = saque["withdraw_id"]
++        conversao.status = "concluida"
++        conversao.concluido_em = datetime.utcnow()
++    except BinanceError as e:
++        logger.error(
++            "Conversão BRL→sats falhou pro pagamento %s (dívida da usuária já "
++            "quitada, isso é só pendência de reconciliação): %s",
++            pagamento.txid,
++            e,
++        )
++        conversao.status = "falhou"
++        conversao.erro = str(e)
++    except Exception as e:
++        # Qualquer outra falha inesperada — nunca deixa propagar e derrubar
++        # o webhook (a resposta ao Mercado Pago precisa ser 200 de qualquer
++        # jeito, o repagamento dela já foi confirmado antes desta função).
++        logger.error(
++            "Conversão BRL→sats falhou de forma inesperada pro pagamento %s: %s",
++            pagamento.txid,
++            e,
++        )
++        conversao.status = "falhou"
++        conversao.erro = str(e)
++
++    db.commit()
++
+ 
+ @router.post(
+     "/webhook",
+diff --git a/backend/app/services/exchange.py b/backend/app/services/exchange.py
+new file mode 100644
+index 0000000..07a1ff0
+--- /dev/null
++++ b/backend/app/services/exchange.py
+@@ -0,0 +1,215 @@
++"""Binance API client — converte BRL recebido via Pix em sats depositados
++de volta na wallet-pool do LNbits.
++
++Fecha o "passo 4" do ciclo financeiro: quando uma usuária repaga via Pix, o
++BRL cai na conta Mercado Pago da fundadora — mas isso é só uma baixa
++contábil enquanto esse BRL não virar sats de verdade de volta no fundo
++Lightning. Sem essa etapa, o pool fica permanentemente mais pobre a cada
++empréstimo (sai sats no empréstimo, nunca volta sats no repagamento).
++
++Não existe conversão BRL→sats automática — é sempre uma compra de Bitcoin
++de verdade, através de uma corretora:
++  1. Cotação atual (pra saber quanto BTC o BRL recebido compra)
++  2. Ordem de compra a mercado (BRL → BTC)
++  3. Saque via Lightning Network direto pra uma invoice da wallet-pool
++
++Binance escolhida entre as opções avaliadas (Foxbit, BityBank/BitPreço,
++Binance) por ser a única com rede Lightning documentada oficialmente na API
++(não só na interface) e situação regulatória resolvida no Brasil em 2026 —
++ver seção 18 do doc mestre (addendum) pro racional completo.
++
++Falls back to mock mode when BINANCE_API_KEY/SECRET are unconfigured, same
++pattern as services/lnbits.py e services/pix.py — MAS com uma diferença
++importante de propósito: aqui tem dinheiro real se movendo (compra e
++saque), então uma falha real em runtime NUNCA cai silenciosamente pra mock
++como nos outros serviços — isso mascararia "a compra falhou" como "a
++compra aconteceu", criando uma inconsistência contábil real (achar que o
++pool foi creditado quando não foi). Falhas em runtime levantam
++BinanceError; quem chama decide o que fazer (registrar como pendente,
++tentar de novo depois, alertar alguém) — nunca finge sucesso.
++"""
++
++import hashlib
++import hmac
++import logging
++import secrets
++import time
++from urllib.parse import urlencode
++
++import httpx
++
++from app.config import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_API_URL
++
++logger = logging.getLogger(__name__)
++
++
++class BinanceError(Exception):
++    """Erro irrecuperável falando com a Binance — nunca cai em mock."""
++
++
++class BinanceService:
++    """Cliente síncrono da API da Binance, restrito ao necessário: cotação
++    pública, compra a mercado de BTC com BRL, e saque via Lightning Network.
++
++    Autenticação: HMAC-SHA256 sobre a query string, enviado como parâmetro
++    `signature`, com o header `X-MBX-APIKEY` — esquema padrão documentado em
++    developers.binance.com/docs/wallet/capital/withdraw.
++    """
++
++    def __init__(self, api_key: str, api_secret: str, base_url: str):
++        self.api_key = api_key
++        self.api_secret = api_secret
++        self.base_url = base_url.rstrip("/")
++        self._mock = not (api_key and api_secret)
++
++    @property
++    def is_mock(self) -> bool:
++        return self._mock
++
++    def _signed_params(self, params: dict) -> dict:
++        """Monta os parâmetros de uma chamada autenticada: timestamp +
++        assinatura HMAC-SHA256 sobre a query string inteira, exatamente como
++        a Binance exige."""
++        params = {**params, "timestamp": int(time.time() * 1000), "recvWindow": 10000}
++        query = urlencode(params)
++        signature = hmac.new(
++            self.api_secret.encode(), query.encode(), hashlib.sha256
++        ).hexdigest()
++        params["signature"] = signature
++        return params
++
++    def _headers(self) -> dict:
++        return {"X-MBX-APIKEY": self.api_key}
++
++    # ── Mock helpers ─────────────────────────────────────────────
++
++    @staticmethod
++    def _mock_cotacao() -> dict:
++        # Preço fixo de propósito — mock precisa ser determinístico e
++        # testável, não tenta simular volatilidade real.
++        return {"symbol": "BTCBRL", "price": 350_000.0}
++
++    @staticmethod
++    def _mock_compra(valor_brl: float) -> dict:
++        preco = BinanceService._mock_cotacao()["price"]
++        qtd_btc = round(valor_brl / preco, 8)
++        return {
++            "order_id": "mock_" + secrets.token_hex(8),
++            "status": "FILLED",
++            "quantidade_btc": qtd_btc,
++            "valor_brl_gasto": valor_brl,
++            "preco_medio": preco,
++        }
++
++    @staticmethod
++    def _mock_saque() -> dict:
++        return {"withdraw_id": "mock_" + secrets.token_hex(8), "status": "mock_enviado"}
++
++    # ── API methods ──────────────────────────────────────────────
++
++    def cotacao_btc_brl(self) -> dict:
++        """Cotação atual do par BTCBRL. Endpoint público — sem autenticação,
++        sem custo de rate limit privado."""
++        if self._mock:
++            return self._mock_cotacao()
++        try:
++            with httpx.Client(timeout=10) as client:
++                resp = client.get(
++                    f"{self.base_url}/api/v3/ticker/price",
++                    params={"symbol": "BTCBRL"},
++                )
++                resp.raise_for_status()
++                data = resp.json()
++                return {"symbol": data["symbol"], "price": float(data["price"])}
++        except Exception as e:
++            logger.warning("Binance cotacao_btc_brl falhou — caindo pra mock: %s", e)
++            return self._mock_cotacao()
++
++    def comprar_btc_mercado(self, valor_brl: float) -> dict:
++        """Compra BTC a mercado gastando exatamente `valor_brl` de BRL.
++
++        Usa `quoteOrderQty` (valor na moeda de cotação) em vez de `quantity`
++        (quantidade de BTC) — deixa a própria Binance calcular a quantidade
++        pela cotação do momento da execução, evita erro de arredondamento
++        nosso e garante que gastamos o valor exato recebido via Pix.
++
++        Retorna {order_id, status, quantidade_btc, valor_brl_gasto, preco_medio}.
++
++        Levanta BinanceError se a chamada falhar — nunca cai em mock aqui
++        (ver docstring do módulo: falha real não pode virar "sucesso" fake).
++        """
++        if self._mock:
++            return self._mock_compra(valor_brl)
++        try:
++            with httpx.Client(timeout=15) as client:
++                params = self._signed_params(
++                    {
++                        "symbol": "BTCBRL",
++                        "side": "BUY",
++                        "type": "MARKET",
++                        "quoteOrderQty": f"{valor_brl:.2f}",
++                    }
++                )
++                resp = client.post(
++                    f"{self.base_url}/api/v3/order",
++                    headers=self._headers(),
++                    params=params,
++                )
++                resp.raise_for_status()
++                data = resp.json()
++                qtd_btc = float(data.get("executedQty", 0))
++                valor_gasto = float(data.get("cummulativeQuoteQty", valor_brl))
++                preco_medio = (valor_gasto / qtd_btc) if qtd_btc else 0.0
++                return {
++                    "order_id": str(data["orderId"]),
++                    "status": data.get("status", "FILLED"),
++                    "quantidade_btc": qtd_btc,
++                    "valor_brl_gasto": valor_gasto,
++                    "preco_medio": preco_medio,
++                }
++        except Exception as e:
++            logger.error("Binance comprar_btc_mercado falhou: %s", e)
++            raise BinanceError(str(e)) from e
++
++    def sacar_lightning(self, invoice: str, valor_btc: float) -> dict:
++        """Saca BTC via Lightning Network direto pra uma invoice específica.
++
++        `network="LIGHTNING"` é o código de rede documentado oficialmente
++        pela própria Binance — não é convenção nossa nem chute (ver
++        developers.binance.com/docs/wallet/capital/deposite-address:
++        "amount needs to be sent if using LIGHTNING network", confirmando
++        tanto o nome da rede quanto a exigência do campo `amount` junto da
++        invoice).
++
++        Retorna {withdraw_id, status}.
++
++        Levanta BinanceError se a chamada falhar — mesmo racional do
++        `comprar_btc_mercado`: nunca finge que o saque saiu se não saiu.
++        """
++        if self._mock:
++            return self._mock_saque()
++        try:
++            with httpx.Client(timeout=15) as client:
++                params = self._signed_params(
++                    {
++                        "coin": "BTC",
++                        "network": "LIGHTNING",
++                        "address": invoice,
++                        "amount": f"{valor_btc:.8f}",
++                    }
++                )
++                resp = client.post(
++                    f"{self.base_url}/sapi/v1/capital/withdraw/apply",
++                    headers=self._headers(),
++                    params=params,
++                )
++                resp.raise_for_status()
++                data = resp.json()
++                return {"withdraw_id": str(data.get("id", "")), "status": "enviado"}
++        except Exception as e:
++            logger.error("Binance sacar_lightning falhou: %s", e)
++            raise BinanceError(str(e)) from e
++
++
++# Module-level singleton
++exchange = BinanceService(BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_API_URL)
+diff --git a/backend/app/tests/conftest.py b/backend/app/tests/conftest.py
+index 7db86cc..f6b11b9 100644
+--- a/backend/app/tests/conftest.py
++++ b/backend/app/tests/conftest.py
+@@ -40,6 +40,19 @@ def mock_pix():
+     pix._mock = True
+ 
+ 
++@pytest.fixture(autouse=True)
++def mock_exchange():
++    """Ensure the Binance client is in mock mode for all tests — envolve
++    dinheiro real (compra + saque), então isso é ainda mais crítico que os
++    outros mocks: nunca deve ser possível rodar a suite de testes e comprar
++    Bitcoin de verdade sem querer."""
++    from app.services.exchange import exchange
++
++    exchange._mock = True
++    yield
++    exchange._mock = True
++
++
+ @pytest.fixture
+ def db_session():
+     """Create a fresh in-memory database for each test."""
+diff --git a/backend/app/tests/test_exchange.py b/backend/app/tests/test_exchange.py
+new file mode 100644
+index 0000000..da2c908
+--- /dev/null
++++ b/backend/app/tests/test_exchange.py
+@@ -0,0 +1,63 @@
++"""Testes do services/exchange.py — cliente Binance em modo mock.
++
++Como o serviço nunca deve cair silenciosamente em mock após uma falha real
++(diferente de lnbits.py/pix.py — ver docstring do módulo pro racional),
++estes testes cobrem: comportamento em mock puro, e que erros de runtime
++levantam BinanceError em vez de mascarar como sucesso.
++"""
++
++import pytest
++
++from app.services.exchange import BinanceError, BinanceService, exchange
++
++
++def test_exchange_inicia_em_mock_sem_credenciais():
++    servico = BinanceService("", "", "https://api.binance.com")
++    assert servico.is_mock
++
++
++def test_exchange_nao_e_mock_com_credenciais():
++    servico = BinanceService("fake_key", "fake_secret", "https://api.binance.com")
++    assert not servico.is_mock
++
++
++def test_cotacao_mock_e_deterministica():
++    assert exchange.is_mock
++    c1 = exchange.cotacao_btc_brl()
++    c2 = exchange.cotacao_btc_brl()
++    assert c1 == c2
++    assert c1["symbol"] == "BTCBRL"
++    assert c1["price"] > 0
++
++
++def test_comprar_btc_mercado_mock_calcula_quantidade_pela_cotacao():
++    cotacao = exchange.cotacao_btc_brl()
++    resultado = exchange.comprar_btc_mercado(1000.0)
++    assert resultado["status"] == "FILLED"
++    assert resultado["valor_brl_gasto"] == 1000.0
++    esperado = round(1000.0 / cotacao["price"], 8)
++    assert resultado["quantidade_btc"] == esperado
++
++
++def test_sacar_lightning_mock_retorna_status_enviado():
++    resultado = exchange.sacar_lightning("lnbc1000mockinvoice", 0.00001)
++    assert resultado["status"] == "mock_enviado"
++    assert resultado["withdraw_id"].startswith("mock_")
++
++
++def test_comprar_btc_mercado_real_levanta_binance_error_em_falha(monkeypatch):
++    """Confirma que uma falha de rede/API real NUNCA vira um resultado mock
++    silencioso — precisa levantar BinanceError explicitamente, porque aqui
++    (diferente de LNbits/Pix) uma falha mascarada como sucesso criaria uma
++    inconsistência contábil real."""
++    servico = BinanceService("fake_key", "fake_secret", "https://api.binance.invalid")
++    assert not servico.is_mock
++
++    with pytest.raises(BinanceError):
++        servico.comprar_btc_mercado(100.0)
++
++
++def test_sacar_lightning_real_levanta_binance_error_em_falha():
++    servico = BinanceService("fake_key", "fake_secret", "https://api.binance.invalid")
++    with pytest.raises(BinanceError):
++        servico.sacar_lightning("lnbc1000fake", 0.00001)
+diff --git a/backend/app/tests/test_pix.py b/backend/app/tests/test_pix.py
+index fc70997..7338af7 100644
+--- a/backend/app/tests/test_pix.py
++++ b/backend/app/tests/test_pix.py
+@@ -6,6 +6,7 @@ uma cobrança Pix, simula a notificação de webhook do Mercado Pago e valida
+ os mesmos efeitos que o fluxo Lightning já teria (abate saldo, sobe tier).
+ """
+ 
++from app.models.conversao_pool import ConversaoPool
+ from app.models.usuaria import Usuaria
+ from app.services.pix import pix
+ 
+@@ -171,3 +172,29 @@ def test_custodia_reserva_fria_vazia_por_padrao(client, db_session):
+     resp = client.get("/custodia/reserva-fria")
+     assert resp.status_code == 200
+     assert resp.json()["configurado"] is False
++
++
++def test_webhook_confirmado_credita_pool_com_conversao_registrada(client, db_session):
++    """O webhook, além de abater a dívida, dispara a conversão BRL→sats de
++    volta pro pool (o "passo 4") — mesmo em mock, deve deixar um registro
++    de auditoria em ConversaoPool."""
++    _, emprestimo = _criar_emprestimo_tier1(client)
++
++    resp = client.post(
++        f"/pix/emprestimos/{emprestimo['id']}/cobranca",
++        json={"valor_sats": 5000, "valor_centavos_brl": 15000},
++    )
++    cobranca = resp.json()
++    client.post("/pix/webhook", json=_webhook_payload(cobranca["mp_payment_id"]))
++
++    conversao = (
++        db_session.query(ConversaoPool)
++        .filter(ConversaoPool.pagamento_pix_id.isnot(None))
++        .first()
++    )
++    assert conversao is not None
++    assert conversao.status == "concluida"
++    assert conversao.quantidade_btc is not None
++    assert conversao.quantidade_btc > 0
++    assert conversao.binance_order_id.startswith("mock_")
++    assert conversao.binance_withdraw_id.startswith("mock_")
+diff --git a/docker-compose.yml b/docker-compose.yml
+index f143c77..a4d8d1c 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -61,6 +61,8 @@ services:
+       - MP_ACCESS_TOKEN=${MP_ACCESS_TOKEN:-}
+       - MP_WEBHOOK_URL=${MP_WEBHOOK_URL:-}
+       - PIX_NOME_RECEBEDOR=${PIX_NOME_RECEBEDOR:-Ateliê Fio de Ouro Materiais Artesanais}
++      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
++      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
+       - MULTISIG_DESCRIPTOR=${MULTISIG_DESCRIPTOR:-}
+       - MULTISIG_ENDERECO=${MULTISIG_ENDERECO:-}
+       - MULTISIG_QUORUM=${MULTISIG_QUORUM:-2-de-3}

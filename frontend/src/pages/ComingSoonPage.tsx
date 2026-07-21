@@ -1,4 +1,5 @@
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import BottomNav, { type NavTarget } from "../components/BottomNav";
 
 interface ComingSoonPageProps {
@@ -10,7 +11,9 @@ interface ComingSoonPageProps {
 export default function ComingSoonPage({ active, title, onNavigate }: ComingSoonPageProps) {
   return (
     <div className="page">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="onboarding onboarding--centered">
         <div className="onboarding__glyph">🧵</div>
         <h1 className="onboarding__title">{title}</h1>

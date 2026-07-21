@@ -1,13 +1,16 @@
 """Router for Trilhas de conhecimento — learning tracks (educational only).
 
 No financial side effects: this router never touches Padrao, ProgressoPadrao,
-tier, or saldo_devedor. It only manages per-user lesson completion state in
+tier, or saldo_devedor. It only manages per-user lesson progress state in
 the `progresso_aulas` table.
 
 Endpoints (public for reads, Bearer for write):
-- GET  /trilhas                  → list (optional filters: tecnica, estilo)
-- GET  /trilhas/{trilha_id}      → detail with niveis[] and aulas[]
-- POST /trilhas/aulas/{aula_id}/concluir  → mark lesson complete (idempotent)
+- GET  /trilhas                            → list (optional filters: tecnica, estilo)
+- GET  /trilhas/me                         → trilhas em que a usuária tem progresso
+- GET  /trilhas/{trilha_id}                → detail with niveis[] and aulas[]
+- POST /trilhas/{trilha_id}/inscrever      → inscrever em todas as aulas da trilha
+- POST /trilhas/aulas/{aula_id}/iniciar    → iniciar uma aula específica
+- POST /trilhas/aulas/{aula_id}/concluir   → mark lesson complete (idempotent)
 """
 
 from datetime import UTC, datetime
@@ -28,6 +31,8 @@ from app.models.usuaria import Usuaria
 from app.schemas.trilha import (
     AulaOut,
     ConcluirAulaResponse,
+    IniciarAulaResponse,
+    InscreverTrilhaResponse,
     MaterialOut,
     NivelOut,
     TrilhaDetailOut,
@@ -200,6 +205,42 @@ def listar_trilhas(
 
 
 @router.get(
+    "/me",
+    response_model=List[TrilhaOut],
+    summary="Minhas trilhas (em andamento/concluídas)",
+    description=(
+        "Retorna apenas as trilhas em que a usuária autenticada tem pelo "
+        "menos um `ProgressoAula` (inscrita ou concluída). Requer Bearer. "
+        "Ordenado por `ordem`. `aulas_concluidas` reflete o progresso real."
+    ),
+)
+def listar_minhas_trilhas(
+    db: Session = Depends(get_db),
+    usuaria: Usuaria = Depends(get_current_usuaria),
+):
+    # IDs de trilhas onde a usuária tem ao menos 1 ProgressoAula.
+    trilha_ids = {
+        r[0]
+        for r in db.query(Aula.trilha_id)
+        .join(ProgressoAula, ProgressoAula.aula_id == Aula.id)
+        .filter(ProgressoAula.usuaria_id == usuaria.id)
+        .distinct()
+        .all()
+    }
+    if not trilha_ids:
+        return []
+
+    trilhas = (
+        db.query(Trilha)
+        .filter(Trilha.id.in_(trilha_ids))
+        .order_by(Trilha.ordem, Trilha.id)
+        .all()
+    )
+    concluidas = _aulas_concluidas_ids(db, usuaria.id)
+    return [_build_trilha_out(t, db, concluidas) for t in trilhas]
+
+
+@router.get(
     "/{trilha_id}",
     response_model=TrilhaDetailOut,
     summary="Detalhes de uma trilha",
@@ -316,4 +357,125 @@ def concluir_aula(
         concluida=True,
         nivel_completo=nivel_completo,
         trilha_completa=trilha_completa,
+    )
+
+
+# ── Inscrição / início ──────────────────────────────────────
+
+
+@router.post(
+    "/{trilha_id}/inscrever",
+    response_model=InscreverTrilhaResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Inscrever em uma trilha",
+    description=(
+        "Cria um `ProgressoAula` com `concluida=False` + `inscrita_em=now` "
+        "para cada aula da trilha em que a usuária ainda não tem registro. "
+        "Idempotente: chamar de novo não duplica — apenas conta em "
+        "`ja_inscritas`. Requer Bearer. Sem efeito colateral financeiro."
+    ),
+)
+def inscrever_trilha(
+    trilha_id: int,
+    db: Session = Depends(get_db),
+    usuaria: Usuaria = Depends(get_current_usuaria),
+):
+    trilha = db.query(Trilha).filter(Trilha.id == trilha_id).first()
+    if not trilha:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Trilha não encontrada")
+
+    aulas = (
+        db.query(Aula)
+        .filter(Aula.trilha_id == trilha_id)
+        .order_by(Aula.nivel, Aula.ordem, Aula.id)
+        .all()
+    )
+    total_aulas = len(aulas)
+
+    # IDs de aulas que já têm ProgressoAula para esta usuária nesta trilha.
+    aulas_com_progresso = {
+        r[0]
+        for r in db.query(ProgressoAula.aula_id)
+        .join(Aula, Aula.id == ProgressoAula.aula_id)
+        .filter(
+            ProgressoAula.usuaria_id == usuaria.id,
+            Aula.trilha_id == trilha_id,
+        )
+        .all()
+    }
+
+    agora = _naive_utc(datetime.now(UTC))
+    novas = 0
+    for aula in aulas:
+        if aula.id in aulas_com_progresso:
+            continue
+        db.add(ProgressoAula(
+            usuaria_id=usuaria.id,
+            aula_id=aula.id,
+            concluida=False,
+            inscrita_em=agora,
+        ))
+        novas += 1
+
+    if novas:
+        db.commit()
+
+    return InscreverTrilhaResponse(
+        trilha_id=trilha_id,
+        aulas_inscritas=novas,
+        ja_inscritas=total_aulas - novas,
+        total_aulas=total_aulas,
+    )
+
+
+@router.post(
+    "/aulas/{aula_id}/iniciar",
+    response_model=IniciarAulaResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Iniciar uma aula específica",
+    description=(
+        "Cria um `ProgressoAula` com `concluida=False` + `inscrita_em=now` "
+        "para a aula, se ainda não existir. Idempotente: se já existe, "
+        "retorna 201 com `iniciada_agora=false` (não duplica, não altera "
+        "estado de conclusão). Útil para 'começar aula' sem inscrever na "
+        "trilha toda. Requer Bearer. Sem efeito colateral financeiro."
+    ),
+)
+def iniciar_aula(
+    aula_id: int,
+    db: Session = Depends(get_db),
+    usuaria: Usuaria = Depends(get_current_usuaria),
+):
+    aula = db.query(Aula).filter(Aula.id == aula_id).first()
+    if not aula:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aula não encontrada")
+
+    progresso = (
+        db.query(ProgressoAula)
+        .filter(
+            ProgressoAula.usuaria_id == usuaria.id,
+            ProgressoAula.aula_id == aula_id,
+        )
+        .first()
+    )
+    if progresso:
+        # Idempotente: não duplica, não sobrescreve concluida nem inscrita_em.
+        return IniciarAulaResponse(
+            aula_id=aula_id,
+            iniciada_agora=False,
+            concluida=bool(progresso.concluida),
+        )
+
+    db.add(ProgressoAula(
+        usuaria_id=usuaria.id,
+        aula_id=aula_id,
+        concluida=False,
+        inscrita_em=_naive_utc(datetime.now(UTC)),
+    ))
+    db.commit()
+
+    return IniciarAulaResponse(
+        aula_id=aula_id,
+        iniciada_agora=True,
+        concluida=False,
     )

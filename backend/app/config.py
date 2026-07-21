@@ -37,6 +37,16 @@ MP_WEBHOOK_URL = os.getenv("MP_WEBHOOK_URL", "")
 # acima, não deste texto.
 PIX_NOME_RECEBEDOR = os.getenv("PIX_NOME_RECEBEDOR", "Ateliê Fio de Ouro Materiais Artesanais")
 
+# ── Binance (conversão BRL → sats de volta pro pool) ────────
+# Fecha o ciclo: quando o repagamento Pix confirma, o BRL que caiu na conta
+# Mercado Pago precisa virar sats de volta no fundo Lightning, senão o pool
+# fica permanentemente mais pobre a cada empréstimo. Vazio por padrão →
+# modo mock (não compra/saca nada de verdade), mesmo padrão do LNbits/Pix.
+# Ver seção 18 do doc mestre (addendum) pro racional de escolha da Binance.
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+BINANCE_API_URL = os.getenv("BINANCE_API_URL", "https://api.binance.com")
+
 # ── Custódia compartilhada (reserva fria multisig) ──────────
 # Preenchido depois de rodar scripts/gerar_multisig.py. Isto é só referência
 # de leitura (descriptor + endereço público) — o backend nunca guarda chave

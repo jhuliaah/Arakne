@@ -34,7 +34,14 @@ from app.schemas.recovery_share_backup import (
     RecoveryShareBackupIn,
     RecoveryShareBackupOut,
 )
-from app.schemas.usuaria import ConviteResponse, NpubUpdate, UsuariaCreate, UsuariaResponse
+from app.schemas.usuaria import (
+    ApelidoUpdate,
+    ConviteResponse,
+    NpubUpdate,
+    UsuariaCreate,
+    UsuariaResponse,
+)
+from app.services.bech32 import to_npub
 from app.services.lnbits import lnbits
 from app.services.risco import ao_receber_aval, pode_avalizar
 
@@ -69,6 +76,42 @@ def _create_recovery_shadows(
                 is_shadow=False,
             )
         )
+
+
+def _build_avalista_out(
+    db: Session,
+    slot: AvalistaRecuperacao,
+) -> AvalistaRecuperacaoOut:
+    """Constrói AvalistaRecuperacaoOut populando `apelido` a partir da
+    Usuaria dona do npub (lookup por npub normalizado em bech32).
+
+    O npub armazenado em AvalistaRecuperacao.npub_avaliadora pode estar em
+    hex ou bech32; o npub em Usuaria.npub também. Normalizamos ambos para
+    bech32 para comparar. Se não houver match (ex.: shadow com npub sem
+    usuária correspondente), `apelido` fica None.
+    """
+    out = AvalistaRecuperacaoOut.model_validate(slot)
+    if not slot.npub_avaliadora:
+        return out
+    npub_norm = to_npub(slot.npub_avaliadora)
+    dona = (
+        db.query(Usuaria)
+        .filter(Usuaria.npub.isnot(None))
+        .filter(Usuaria.apelido.isnot(None))
+        .all()
+    )
+    for u in dona:
+        if to_npub(u.npub) == npub_norm:
+            out.apelido = u.apelido
+            break
+    return out
+
+
+def _build_avalistas_out(
+    db: Session,
+    slots: list[AvalistaRecuperacao],
+) -> list[AvalistaRecuperacaoOut]:
+    return [_build_avalista_out(db, s) for s in slots]
 
 
 # ── Endpoints ─────────────────────────────────────────────────
@@ -137,6 +180,7 @@ def create_usuaria(
         codigo_indicacao=codigo,
         codigo_indicacao_usado=payload.codigo_indicacao,
         npub=payload.npub,
+        apelido=payload.apelido,
     )
     db.add(usuaria)
     db.flush()  # get the id without committing yet
@@ -207,6 +251,26 @@ def update_npub(
     return current_usuaria
 
 
+@router.patch(
+    "/me/apelido",
+    response_model=UsuariaResponse,
+    summary="Atualizar apelido da usuária logada",
+    description="Atualiza o apelido público da usuária autenticada (1 a 80 chars, "
+    "sem whitespace nas bordas). O apelido é exibido em telas de vinculação "
+    "de tecelãs em vez do npub truncado. Pode ser definido ou sobrescrito a "
+    "qualquer momento após o cadastro.",
+)
+def update_apelido(
+    payload: ApelidoUpdate,
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    current_usuaria.apelido = payload.apelido
+    db.commit()
+    db.refresh(current_usuaria)
+    return current_usuaria
+
+
 @router.get(
     "/me/convite",
     response_model=ConviteResponse,
@@ -249,7 +313,7 @@ def get_my_avalistas_recuperacao(
         .all()
     )
     return AvalistasRecuperacaoListResponse(
-        avalistas=[AvalistaRecuperacaoOut.model_validate(a) for a in avalistas]
+        avalistas=_build_avalistas_out(db, avalistas)
     )
 
 
@@ -321,7 +385,7 @@ def vincular_mentor_recuperacao(
     db.add(slot)
     db.commit()
     db.refresh(slot)
-    return slot
+    return _build_avalista_out(db, slot)
 
 
 @router.get(
@@ -385,7 +449,7 @@ def get_avalistas_recuperacao_by_identificador(
         .all()
     )
     return AvalistasRecuperacaoListResponse(
-        avalistas=[AvalistaRecuperacaoOut.model_validate(a) for a in avalistas]
+        avalistas=_build_avalistas_out(db, avalistas)
     )
 
 

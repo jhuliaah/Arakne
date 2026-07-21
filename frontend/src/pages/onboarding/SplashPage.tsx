@@ -3,9 +3,11 @@ import Header from "../../components/Header";
 interface SplashPageProps {
   onCreateAccount: () => void;
   onHaveAccount: () => void;
+  /** Volta para o fluxo de recuperação de conta (Lane D conecta). */
+  onRecuperar?: () => void;
 }
 
-export default function SplashPage({ onCreateAccount, onHaveAccount }: SplashPageProps) {
+export default function SplashPage({ onCreateAccount, onHaveAccount, onRecuperar }: SplashPageProps) {
   return (
     <div className="page">
       <Header />
@@ -20,9 +22,19 @@ export default function SplashPage({ onCreateAccount, onHaveAccount }: SplashPag
             Criar conta
           </button>
           <button className="btn btn--secondary" onClick={onHaveAccount}>
-            Já tenho conta
+            Acessar conta
           </button>
         </div>
+        {/* Link discreto para recuperação — disfarçado de "perdi meu
+            projeto", para não quebrar a aparência crochê da tela inicial.
+            Visualmente mais sutil que os botões primários. */}
+        {onRecuperar && (
+          <div className="onboarding__footer-link" style={{ marginTop: "1.25rem" }}>
+            <button type="button" onClick={onRecuperar}>
+              Perdi o acesso ao meu projeto
+            </button>
+          </div>
+        )}
       </main>
     </div>
   );

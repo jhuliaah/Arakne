@@ -5,9 +5,10 @@
  *  a chave derivada do padrão (PBKDF2 + AES-GCM). Se bater, a sessão é
  *  destravada.
  *
- *  Após 8 tentativas erradas, mostra "Precisa de ajuda? Peça à sua
- *  convidadora" (recuperação social via NIP-17 cortada este ciclo — sem
- *  fluxo automatizado).
+ *  Após 8 tentativas erradas, mostra "Deseja agendar uma nova aula de
+ *  crochê? Solicite uma aula de reforço a sua tecelã amiga" — o botão
+ *  "Solicitar aula de reforço" encadeia para o fluxo de recuperação
+ *  social (onForgotPattern → RecoverAccountPage → RecoveryHelpRequestPage).
  */
 
 import { useState } from "react";
@@ -99,21 +100,25 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount, onForgot
     setResetKey((k) => k + 1);
   }
 
-  // Atingiu o limite de tentativas — mensagem de ajuda (sem fluxo automatizado).
+  // Atingiu o limite de tentativas — mensagem de ajuda com botão para
+  // solicitar aula de reforço (encadeia para o fluxo de recuperação
+  // social via onForgotPattern → RecoverAccountPage → ped ajuda a tecelã).
   if (attempts >= MAX_ATTEMPTS) {
     return (
       <div className="page">
         <Header />
         <main className="onboarding onboarding--centered">
           <div className="onboarding__glyph">🧶</div>
-          <h1 className="onboarding__title">Precisa de ajuda?</h1>
+          <h1 className="onboarding__title">Deseja agendar uma nova aula de crochê</h1>
           <p className="onboarding__tagline">
-            Peça à sua convidadora — ela pode te ajudar a recuperar o acesso ao
-            seu ateliê.
+            Solicite uma aula de reforço a sua tecelã amiga
           </p>
           <div className="onboarding__form">
             <button className="btn btn--primary" onClick={handleTryAgain}>
               Tentar de novo
+            </button>
+            <button className="btn btn--secondary" onClick={onForgotPattern}>
+              Solicitar aula de reforço
             </button>
           </div>
         </main>

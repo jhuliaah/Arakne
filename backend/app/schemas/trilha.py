@@ -71,3 +71,29 @@ class ConcluirAulaResponse(BaseModel):
     concluida: bool
     nivel_completo: bool
     trilha_completa: bool
+
+
+class InscreverTrilhaResponse(BaseModel):
+    """Resposta de `POST /trilhas/{trilha_id}/inscrever`.
+
+    - `aulas_inscritas`: quantas aulas ganharam um novo ProgressoAula nesta
+      chamada (criadas agora com `concluida=False` + `inscrita_em=now`).
+    - `ja_inscritas`: quantas já tinham registro prévio (não duplicadas).
+    - `total_aulas`: total de aulas da trilha.
+    """
+    trilha_id: int
+    aulas_inscritas: int
+    ja_inscritas: int
+    total_aulas: int
+
+
+class IniciarAulaResponse(BaseModel):
+    """Resposta de `POST /trilhas/aulas/{aula_id}/iniciar`.
+
+    - `iniciada_agora`: True se a linha foi criada nesta chamada; False se
+      já existia (idempotente).
+    - `concluida`: estado atual da aula (pode já estar concluída).
+    """
+    aula_id: int
+    iniciada_agora: bool
+    concluida: bool

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 
 interface ScannerQRPageProps {
   onBack: () => void;
@@ -94,7 +95,9 @@ export default function ScannerQRPage({ onBack, onScanned }: ScannerQRPageProps)
 
   return (
     <div className="page theme-financial">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="financial">
         <button className="financial__back" onClick={onBack} aria-label="Voltar">
           ← Voltar

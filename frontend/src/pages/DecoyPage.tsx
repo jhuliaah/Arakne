@@ -13,6 +13,7 @@
 
 import { useState } from "react";
 import Header from "../components/Header";
+import RecoveryBellHost from "../components/RecoveryBellHost";
 import PatternCard from "../components/PatternCard";
 import type { Pattern } from "../types";
 
@@ -93,7 +94,9 @@ export default function DecoyPage({ onBack }: DecoyPageProps) {
 
   return (
     <div className="page">
-      <Header />
+      <Header>
+        <RecoveryBellHost />
+      </Header>
       <main className="catalog">
         <button className="financial__back" onClick={onBack} aria-label="Voltar">
           ← Voltar

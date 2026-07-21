@@ -6,6 +6,7 @@ uma cobrança Pix, simula a notificação de webhook do Mercado Pago e valida
 os mesmos efeitos que o fluxo Lightning já teria (abate saldo, sobe tier).
 """
 
+from app.models.conversao_pool import ConversaoPool
 from app.models.usuaria import Usuaria
 from app.services.pix import pix
 
@@ -171,3 +172,29 @@ def test_custodia_reserva_fria_vazia_por_padrao(client, db_session):
     resp = client.get("/custodia/reserva-fria")
     assert resp.status_code == 200
     assert resp.json()["configurado"] is False
+
+
+def test_webhook_confirmado_credita_pool_com_conversao_registrada(client, db_session):
+    """O webhook, além de abater a dívida, dispara a conversão BRL→sats de
+    volta pro pool (o "passo 4") — mesmo em mock, deve deixar um registro
+    de auditoria em ConversaoPool."""
+    _, emprestimo = _criar_emprestimo_tier1(client)
+
+    resp = client.post(
+        f"/pix/emprestimos/{emprestimo['id']}/cobranca",
+        json={"valor_sats": 5000, "valor_centavos_brl": 15000},
+    )
+    cobranca = resp.json()
+    client.post("/pix/webhook", json=_webhook_payload(cobranca["mp_payment_id"]))
+
+    conversao = (
+        db_session.query(ConversaoPool)
+        .filter(ConversaoPool.pagamento_pix_id.isnot(None))
+        .first()
+    )
+    assert conversao is not None
+    assert conversao.status == "concluida"
+    assert conversao.quantidade_btc is not None
+    assert conversao.quantidade_btc > 0
+    assert conversao.binance_order_id.startswith("mock_")
+    assert conversao.binance_withdraw_id.startswith("mock_")

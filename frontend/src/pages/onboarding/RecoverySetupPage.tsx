@@ -62,6 +62,12 @@ function truncarNpub(npub: string): string {
   return `${npub.slice(0, 8)}...${npub.slice(-3)}`;
 }
 
+/** Rótulo de uma tecelã: prefere apelido (Mudança #7-frontend), com
+ *  fallback para npub truncado quando o apelido não existe. */
+function rotuloTecela(tec: AvalistaRecuperacao): string {
+  return tec.apelido?.trim() || truncarNpub(tec.npub_avaliadora);
+}
+
 export default function RecoverySetupPage({ npub, nsec, pin, onDone, onBack }: RecoverySetupPageProps) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [avalistas, setAvalistas] = useState<AvalistaRecuperacao[]>([]);
@@ -189,7 +195,7 @@ export default function RecoverySetupPage({ npub, nsec, pin, onDone, onBack }: R
             >
               <div className="tecelas-list__slot">#{i + 1}</div>
               <div className="tecelas-list__info">
-                <span className="tecelas-list__npub">{truncarNpub(a.npub_avaliadora)}</span>
+                <span className="tecelas-list__npub">{rotuloTecela(a)}</span>
                 <span className="tecelas-list__meta">
                   {a.is_shadow ? "Tecelã-sombra" : "Tecelã indicada por você"}
                 </span>

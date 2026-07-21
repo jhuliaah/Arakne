@@ -87,6 +87,11 @@ export interface IncomingRecoveryRequest {
   initiatorNpub: string;
   /** Mensagem opcional (ex.: motivo do pedido). */
   message?: string;
+  /** Timestamp de criação do pedido (segundos Unix). Vem do rumor
+   *  `request` (campo `createdAt`) — usado pela UI do sino para mostrar
+   *  a hora. Opcional porque pedidos antigos (sem o campo) ainda podem
+   *  existir em relays. */
+  createdAt?: number;
 }
 
 // ── localStorage keys ──────────────────────────────────────────
@@ -364,6 +369,7 @@ export function startRecoveryListener(
         vaultId: request.vaultId,
         initiatorNpub: request.initiatorNpub,
         message: request.message,
+        createdAt: request.createdAt,
       };
 
       // Notifica UI (Track 4D) — não bloqueia a resposta automática.
@@ -387,41 +393,89 @@ export function startRecoveryListener(
         return;
       }
 
-      // Cria rumor de resposta (type: "response") com a share.
-      const responseRumor: RecoveryRumor = {
-        type: "response",
-        vaultId: share.vaultId,
-        requestEventId: wrap.id,
-        approved: true,
-        share: bytesToBase64(share.share),
-        createdAt: Math.floor(Date.now() / 1000),
-      };
-
-      // Decodifica initiatorNpub bech32 → hex para gift-wrap.
-      const initiatorPubHex = decodeNpub(request.initiatorNpub);
-
-      // Gift-wrap de volta ao initiator (NIP-59: rumor → seal → wrap).
-      // O seal é assinado com o nsec da avalista (remetente).
-      const responseWrap = wrapToRecipient(
+      // Publica o gift-wrap de resposta (type: "response") à convidada.
+      // Reusa a função pública `publishRecoveryResponse` (Track 4D) — o
+      // QR on-demand é uma camada extra; a resposta automática continua
+      // sendo publicada para o caso da convidada não escanear o QR.
+      await publishRecoveryResponse(
         avalistaNsec,
-        initiatorPubHex,
-        responseRumor,
-        [["t", RECOVERY_TAGS.response]],
+        share,
+        request.initiatorNpub,
+        wrap.id,
       );
-
-      // Publica em TODOS os relays hardcoded (redundância).
-      const ok = await publishEvent(responseWrap);
-      if (!ok) {
-        console.error(
-          "[recovery-respond] falha ao publicar resposta em todos os relays",
-        );
-      }
     } catch (err) {
       console.error("[recovery-respond] erro ao processar wrap:", err);
     }
   });
 
   return cleanup;
+}
+
+// ── API pública: resposta manual (Track 4D — QR on-demand) ────
+
+/**
+ * Busca a share guardada no cache em memória para um dado ownerNpub.
+ * Usado pelo RecoveryQRGenerator (Track 4D) para desembrulhar a share 0
+ * que a tecelã tem em cache e gerar o QR efêmero.
+ *
+ * @param ownerNpub - npub (bech32) da dona do vault
+ * @returns a share guardada, ou null se não houver (cache vazio ou
+ *   dona desconhecida)
+ */
+export function getShareForOwner(ownerNpub: string): StoredShare | null {
+  const share = sessionSharesCache.find((s) => s.ownerNpub === ownerNpub);
+  return share ?? null;
+}
+
+/**
+ * Publica um gift-wrap `type:"response"` endereçado ao npub efêmero da
+ * convidada, contendo a share 0. Usado pelo listener (resposta automática)
+ * e pelo RecoveryQRGenerator (Track 4D — QR on-demand). Reusa a mesma
+ * lógica de gift-wrap NIP-59 do listener.
+ *
+ * @param avalistaNsec - nsec da tecelã (assina o seal)
+ * @param share - share guardada (vai no content do rumor, em base64)
+ * @param initiatorNpub - npub efêmero da convidada (destinatário)
+ * @param requestEventId - event id (hex) do rumor `request` original
+ *   (referência de resposta — pode ser string vazia se desconhecido)
+ * @returns true se publicou em ≥1 relay, false caso contrário
+ */
+export async function publishRecoveryResponse(
+  avalistaNsec: Uint8Array,
+  share: StoredShare,
+  initiatorNpub: string,
+  requestEventId: string,
+): Promise<boolean> {
+  // Cria rumor de resposta (type: "response") com a share.
+  const responseRumor: RecoveryRumor = {
+    type: "response",
+    vaultId: share.vaultId,
+    requestEventId,
+    approved: true,
+    share: bytesToBase64(share.share),
+    createdAt: Math.floor(Date.now() / 1000),
+  };
+
+  // Decodifica initiatorNpub bech32 → hex para gift-wrap.
+  const initiatorPubHex = decodeNpub(initiatorNpub);
+
+  // Gift-wrap de volta ao initiator (NIP-59: rumor → seal → wrap).
+  // O seal é assinado com o nsec da avalista (remetente).
+  const responseWrap = wrapToRecipient(
+    avalistaNsec,
+    initiatorPubHex,
+    responseRumor,
+    [["t", RECOVERY_TAGS.response]],
+  );
+
+  // Publica em TODOS os relays hardcoded (redundância).
+  const ok = await publishEvent(responseWrap);
+  if (!ok) {
+    console.error(
+      "[recovery-respond] falha ao publicar resposta em todos os relays",
+    );
+  }
+  return ok;
 }
 
 // ── Helpers internos ───────────────────────────────────────────

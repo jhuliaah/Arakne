@@ -121,3 +121,24 @@ export interface ConcluirAulaResponse {
   nivel_completo: boolean;
   trilha_completa: boolean;
 }
+
+// ── Inscrição/início de trilhas e aulas (BUG 3) ─────────────
+// Educacional apenas — sem acoplamento financeiro.
+
+/** Resposta de `POST /trilhas/{trilha_id}/inscrever` — cria
+ *  ProgressoAula(concluida=False) para cada aula sem registro prévio.
+ *  Idempotente: inscrever de novo retorna `ja_inscritas = total_aulas`. */
+export interface InscreverTrilhaResponse {
+  trilha_id: number;
+  aulas_inscritas: number;
+  ja_inscritas: number;
+  total_aulas: number;
+}
+
+/** Resposta de `POST /trilhas/aulas/{aula_id}/iniciar` — cria
+ *  ProgressoAula para uma aula específica. Idempotente. */
+export interface IniciarAulaResponse {
+  aula_id: number;
+  iniciada_agora: boolean;
+  concluida: boolean;
+}
