@@ -829,9 +829,9 @@ export async function getCustodiaReservaFria(): Promise<CustodiaReservaFria | nu
   }
 }
 
-// ── Carteira Arakne ────────────────────────────────────────
+// ── Cesta de novelos (carteira) ────────────────────────────
 // Carteira interna de sats com conversão BRL. Os endpoints /carteira/*
-// exigem Bearer (ensureToken). Na UI aparece como "Carteira" — o
+// exigem Bearer (ensureToken). Na UI aparece como "Cesta de novelos" — o
 // vocabulário sats/BTC fica em texto pequeno, nunca em destaque.
 
 /** Cotação BTC↔BRL (GET /carteira/cotacao). Público, sem Bearer. */

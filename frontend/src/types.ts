@@ -190,9 +190,9 @@ export interface CustodiaReservaFria {
   mensagem?: string;
 }
 
-// ── Carteira Arakne ────────────────────────────────────────
+// ── Cesta de novelos (carteira) ────────────────────────────
 // Carteira interna de sats com conversão BRL via cotação do backend.
-// Na UI aparece como "Carteira" (saldo em novelos/fios) — o vocabulário
+// Na UI aparece como "Cesta de novelos" (saldo em novelos) — o vocabulário
 // sats/BTC fica em texto pequeno, como detalhe técnico, nunca em destaque.
 // Os endpoints /carteira/* são protegidos por Bearer (ensureToken).
 

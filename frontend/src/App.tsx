@@ -179,7 +179,7 @@ export default function App() {
   // Set when ScannerQRPage successfully reads a code — consumed once by
   // FinancialPage to pre-fill the troca form, then cleared.
   const [scannedIdentificador, setScannedIdentificador] = useState<string | null>(null);
-  // Modo da tela de transação da carteira (pagar/receber/quitar).
+  // Modo da tela de transação da cesta de novelos (entregar/receber/devolver).
   // Definido pelo FinancialPage antes de navegar para carteiraTransacao.
   const [carteiraModo, setCarteiraModo] = useState<CarteiraModo>("receber");
   // Trilha/aula navigation state for the learning trails.

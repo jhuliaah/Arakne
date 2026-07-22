@@ -268,7 +268,7 @@ function LeitorQRInline({
             />
           </div>
           <p className="field__hint" style={{ textAlign: "center", marginTop: "0.5rem" }}>
-            {ready ? "Aponte para o código Pix do comerciante." : "Ligando a câmera..."}
+            {ready ? "Aponte para o código Pix de quem vai receber." : "Ligando a câmera..."}
           </p>
         </>
       )}
@@ -380,7 +380,7 @@ export default function CarteiraTransacaoPage({
           return;
         }
         if (!chavePix.trim()) {
-          setErro("Digite a chave Pix do comerciante.");
+          setErro("Digite a chave Pix de quem vai receber.");
           setEtapa("input");
           return;
         }
@@ -435,7 +435,7 @@ export default function CarteiraTransacaoPage({
       const msg = e instanceof Error ? e.message : "";
       // 403 = país não suportado
       if (/pa[íi]s|n[ãa]o suport|brasil/i.test(msg)) {
-        setErro("Pagamentos via Pix estão disponíveis apenas no Brasil por enquanto.");
+        setErro("Entrega de novelos só disponível no Brasil.");
       } else {
         setErro(msg || "Algo deu errado. Tente de novo.");
       }
@@ -557,7 +557,7 @@ export default function CarteiraTransacaoPage({
             {(modo === "pagar" || modo === "receber") && (
               <div className="field" style={{ marginBottom: "0.75rem" }}>
                 <label className="field__label" htmlFor="valor-brl">
-                  {modo === "pagar" ? "Quanto quer pagar?" : "Quanto quer receber?"}
+                  {modo === "pagar" ? "Quanto quer entregar?" : "Quanto quer receber?"}
                 </label>
                 <input
                   id="valor-brl"
@@ -604,7 +604,7 @@ export default function CarteiraTransacaoPage({
               <>
                 <div className="field" style={{ marginBottom: "0.75rem" }}>
                   <label className="field__label" htmlFor="chave-pix">
-                    Chave Pix do comerciante
+                    Chave Pix de quem vai receber
                   </label>
                   <input
                     id="chave-pix"
@@ -654,7 +654,7 @@ export default function CarteiraTransacaoPage({
               onClick={submeter}
             >
               {modo === "pagar"
-                ? "Pagar"
+                ? "Entregar novelos"
                 : modo === "receber"
                 ? "Gerar código de fios"
                 : "Gerar código de devolução"}
@@ -667,7 +667,7 @@ export default function CarteiraTransacaoPage({
           <div className="financial__invite">
             <div className="loading" style={{ padding: "2rem 0" }}>
               <div className="spinner" />
-              <p>Preparando seus fios...</p>
+              <p>Enrolando seus novelos...</p>
             </div>
           </div>
         )}
@@ -680,9 +680,9 @@ export default function CarteiraTransacaoPage({
               <>
                 <div className="repay-result">
                   <div className="repay-result__icon">✅</div>
-                  <h3 className="repay-result__title">Pagamento confirmado!</h3>
+                  <h3 className="repay-result__title">Novelos entregues!</h3>
                   <p className="repay-result__text">
-                    Fios transferidos. Seu ateliê já está atualizado.
+                    Seu ateliê já está atualizado.
                   </p>
                 </div>
                 <button
@@ -697,8 +697,8 @@ export default function CarteiraTransacaoPage({
             {/* Depósito (modo receber) — QR + polling */}
             {modo === "receber" && depositoQr && (
               <>
-                <h3 className="financial__history-title">Receber fios</h3>
-                <p className="modal__text">Escaneie o código para concluir o depósito.</p>
+                <h3 className="financial__history-title">Receber novelos</h3>
+                <p className="modal__text">Escaneie o código para concluir o recebimento.</p>
                 <CodigoQR
                   qrCodeBase64={depositoQr.qr_code_base64}
                   qrCode={depositoQr.qr_code}
@@ -710,7 +710,7 @@ export default function CarteiraTransacaoPage({
                   {brlFormatter.format(depositoQr.valor_centavos_brl / 100)}
                 </p>
                 <p className="modal__hint" style={{ textAlign: "center" }}>
-                  Aguardando pagamento...
+                  Aguardando seus novelos...
                 </p>
                 <div className="financial__invite-link" style={{ marginTop: "0.75rem" }}>
                   <input
@@ -758,7 +758,7 @@ export default function CarteiraTransacaoPage({
                   {brlFormatter.format(quitacaoQr.valor_centavos_brl / 100)}
                 </p>
                 <p className="modal__hint" style={{ textAlign: "center" }}>
-                  Aguardando pagamento...
+                  Aguardando seus novelos...
                 </p>
                 <div className="financial__invite-link" style={{ marginTop: "0.75rem" }}>
                   <input

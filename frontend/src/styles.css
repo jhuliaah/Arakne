@@ -1269,9 +1269,10 @@ h1, h2, h3,
   color: var(--color-muted);
 }
 
-/* ── Carteira Arakne ─────────────────────────────────────────
+/* ── Cesta de novelos (carteira) ────────────────────────────
    Card de saldo da carteira interna (sats + BRL). Disfarce:
-   "Carteira" + "Saldo" + "Cotação do fio". sats em texto pequeno. */
+   "Cesta de novelos" + "Seus novelos" + "Valor do novelo".
+   sats em texto pequeno. */
 .carteira-card__saldo {
   margin-bottom: 0.75rem;
 }
