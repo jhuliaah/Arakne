@@ -430,6 +430,12 @@ export default function App() {
           setView("recoveryScanner");
         }}
         onBack={() => setView("recoverAccount")}
+        // BUG 4: quando a conta não tem tecelãs de confiança vinculadas,
+        // a tela de erro oferece "Ir ao meu ateliê" → FinancialPage,
+        // onde a usuária pode vincular uma tecelã (seção "Tecelã de
+        // confiança"). Antes, só havia "Tentar de novo" / "Voltar",
+        // deixando a convidada sem caminho acionável.
+        onGoToAtelie={() => setView("financial")}
       />
     );
   }

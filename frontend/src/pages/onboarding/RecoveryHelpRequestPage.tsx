@@ -46,6 +46,14 @@ interface RecoveryHelpRequestPageProps {
   onAwaitScanner: (ephemeralNsec: Uint8Array) => void;
   /** Volta para a tela anterior. */
   onBack: () => void;
+  /** BUG 4: chamado quando a conta não tem tecelãs de confiança
+   *  vinculadas e a convidada precisa ir ao ateliê para vincular uma.
+   *  O App.tsx conecta à view "financial" (onde fica a seção
+   *  "Tecelã de confiança"). Sem isso, a tela de erro só oferecia
+   *  "Tentar de novo" / "Voltar", deixando a convidada sem caminho
+   *  acionável — o pedido falha por falta de tecelãs e tentar de novo
+   *  não resolve (a conta continua sem vincular). */
+  onGoToAtelie: () => void;
 }
 
 /** Estado da tela. */
@@ -57,21 +65,42 @@ type Phase =
   | "aguardando" // Estado 5: pedido publicado, aguardar scanner
   | "erro"; // Estado 6: erro
 
+/** BUG 4: classifica o tipo de erro para mostrar a mensagem e os botões
+ *  certos na phase="erro". Antes, todos os erros levavam à mesma tela
+ *  com só "Tentar de novo" / "Voltar" — inclusive o caso de a conta
+ *  não ter tecelãs vinculadas, onde tentar de novo não resolve.
+ *
+ *  - "semAvalistas": a conta não tem tecelãs de confiança vinculadas.
+ *    Mostra botão "Ir ao meu ateliê" (primário) + "Voltar". Sem
+ *    "Tentar de novo" (não resolve — a conta continua sem vincular).
+ *  - "rede": havia tecelãs, mas o pedido não foi publicado em nenhum
+ *    relay. Mostra "Tentar de novo" + "Voltar".
+ *  - "generico": erro inesperado (ex.: identificador vazio, exceção).
+ *    Mostra "Tentar de novo" + "Voltar". */
+type ErroKind = "semAvalistas" | "rede" | "generico";
+
 /** Trunca npub bech32 para "npub1…abcd". */
 function truncarNpub(npub: string): string {
   if (!npub || npub.length < 16) return npub;
   return `${npub.slice(0, 8)}…${npub.slice(-4)}`;
 }
 
+/** Rótulo disfarçado da tecelã: prefere apelido, fallback npub truncado. */
+function rotuloTecela(av: AvalistaRecuperacao): string {
+  return av.apelido?.trim() || truncarNpub(av.npub_avaliadora);
+}
+
 export default function RecoveryHelpRequestPage({
   onAwaitScanner,
   onBack,
+  onGoToAtelie,
 }: RecoveryHelpRequestPageProps) {
   const [phase, setPhase] = useState<Phase>("input");
   const [identificador, setIdentificador] = useState("");
   const [avalistas, setAvalistas] = useState<AvalistaRecuperacao[]>([]);
   const [escolhidaIndex, setEscolhidaIndex] = useState<number>(-1); // -1 = todas
   const [errorMsg, setErrorMsg] = useState("");
+  const [erroKind, setErroKind] = useState<ErroKind | null>(null);
   const [ephemeralNsec, setEphemeralNsec] = useState<Uint8Array | null>(null);
 
   // ── Estado 2: busca tecelãs no backend ──────────────────────
@@ -79,17 +108,33 @@ export default function RecoveryHelpRequestPage({
     const id = identificador.trim();
     if (!id) {
       setErrorMsg("Informe o identificador do seu ateliê.");
+      setErroKind("generico");
       setPhase("erro");
       return;
     }
     setPhase("buscando");
     setErrorMsg("");
+    setErroKind(null);
     try {
       const lista = await getAvalistasByIdentificador(id);
-      if (!lista || lista.length === 0) {
+      // BUG 4: distinguir "busca falhou" (null) de "conta não tem
+      // tecelãs vinculadas" (array vazio). Antes, ambos caíam na
+      // mesma mensagem misleading ("Confira o identificador"),
+      // sugerindo que o identificador estava errado — quando na
+      // verdade a conta existe mas nunca vinculou uma tecelã.
+      if (lista === null) {
+        setErrorMsg("Não conseguimos buscar suas tecelãs agora. Tente de novo.");
+        setErroKind("generico");
+        setPhase("erro");
+        return;
+      }
+      if (lista.length === 0) {
         setErrorMsg(
-          "Não encontramos tecelãs vinculadas a esse ateliê. Confira o identificador."
+          "Você ainda não vinculou nenhuma tecelã de confiança. " +
+            "Para pedir a aula de ponto, primeiro vincule uma tecelã no " +
+            "seu ateliê (menu 'Meu ateliê' → 'Tecelã de confiança')."
         );
+        setErroKind("semAvalistas");
         setPhase("erro");
         return;
       }
@@ -99,6 +144,7 @@ export default function RecoveryHelpRequestPage({
     } catch (err) {
       console.error("[RecoveryHelpRequestPage] busca de avalistas falhou:", err);
       setErrorMsg("Não conseguimos buscar suas tecelãs agora. Tente de novo.");
+      setErroKind("generico");
       setPhase("erro");
     }
   }
@@ -107,6 +153,7 @@ export default function RecoveryHelpRequestPage({
   async function handlePedirAjuda() {
     setPhase("enviando");
     setErrorMsg("");
+    setErroKind(null);
     try {
       // startRecoveryRequest busca npub + avalistas, faz login (com
       // PIN vazio — falha silenciosamente no login, mas o pedido NIP-59
@@ -119,11 +166,29 @@ export default function RecoveryHelpRequestPage({
       // Se a convidada escolheu uma tecelã específica, mas o pedido
       // foi publicado para todas (startRecoveryRequest não filtra),
       // tudo bem — o QR on-demand é gerado só pela tecelã que aceitar.
-      // Se published === 0, nenhuma tecelã recebeu.
+      //
+      // BUG 4: distinguir por que published === 0.
+      //  - published === 0 && failed === 0: o loop de avalistas em
+      //    startRecoveryRequest não executou nenhuma vez → a conta
+      //    não tem tecelãs vinculadas. Tentar de novo não resolve;
+      //    a convidada precisa vincular uma tecelã no ateliê.
+      //  - published === 0 && failed > 0: houve tentativas (havia
+      //    tecelãs) mas todos os relays rejeitaram → erro de rede.
+      //    Tentar de novo pode funcionar em alguns instantes.
       if (result.published === 0) {
-        setErrorMsg(
-          "Não conseguimos enviar o pedido às tecelãs agora. Tente de novo mais tarde."
-        );
+        if (result.failed === 0) {
+          setErrorMsg(
+            "Você ainda não vinculou nenhuma tecelã de confiança. " +
+              "Para pedir a aula de ponto, primeiro vincule uma tecelã no " +
+              "seu ateliê (menu 'Meu ateliê' → 'Tecelã de confiança')."
+          );
+          setErroKind("semAvalistas");
+        } else {
+          setErrorMsg(
+            "Não conseguimos enviar o pedido agora. Tente novamente em alguns instantes."
+          );
+          setErroKind("rede");
+        }
         setPhase("erro");
         return;
       }
@@ -135,6 +200,7 @@ export default function RecoveryHelpRequestPage({
       setErrorMsg(
         "Não conseguimos enviar o pedido às tecelãs agora. Confira o identificador e tente de novo."
       );
+      setErroKind("generico");
       setPhase("erro");
     }
   }
@@ -147,6 +213,7 @@ export default function RecoveryHelpRequestPage({
 
   function handleTentarDeNovo() {
     setErrorMsg("");
+    setErroKind(null);
     setPhase(identificador.trim() ? "escolhendo" : "input");
   }
 
@@ -267,7 +334,7 @@ export default function RecoveryHelpRequestPage({
                       }}
                       onClick={() => setEscolhidaIndex(idx)}
                     >
-                      <strong>{truncarNpub(av.npub_avaliadora)}</strong>
+                      <strong>{rotuloTecela(av)}</strong>
                       {av.is_shadow && (
                         <span
                           className="field__hint"
@@ -333,26 +400,60 @@ export default function RecoveryHelpRequestPage({
           </>
         )}
 
-        {/* Estado 6 — Erro */}
+        {/* Estado 6 — Erro
+            BUG 4: a tela de erro agora distingue o tipo de erro.
+            - semAvalistas: a conta não tem tecelãs vinculadas.
+              Mostra "Ir ao meu ateliê" (primário) + "Voltar". Sem
+              "Tentar de novo" — não resolve, a conta segue sem
+              tecelãs e o pedido sempre falha.
+            - rede / generico: erro temporário ou inesperado. Mostra
+              "Tentar de novo" (primário) + "Voltar". */}
         {phase === "erro" && (
           <>
-            <h1 className="onboarding__title">Não foi dessa vez</h1>
+            <h1 className="onboarding__title">
+              {erroKind === "semAvalistas"
+                ? "Sem tecelãs de confiança"
+                : "Não foi dessa vez"}
+            </h1>
             <p className="onboarding__tagline">
               {errorMsg ||
                 "Não conseguimos enviar o pedido agora. Tente novamente."}
             </p>
 
             <div className="onboarding__form">
-              <button className="btn btn--primary" onClick={handleTentarDeNovo}>
-                Tentar de novo
-              </button>
-              <button
-                className="btn btn--secondary"
-                onClick={onBack}
-                style={{ marginTop: "0.5rem" }}
-              >
-                Voltar
-              </button>
+              {erroKind === "semAvalistas" ? (
+                <>
+                  <button
+                    className="btn btn--primary"
+                    onClick={onGoToAtelie}
+                  >
+                    Ir ao meu ateliê
+                  </button>
+                  <button
+                    className="btn btn--secondary"
+                    onClick={onBack}
+                    style={{ marginTop: "0.5rem" }}
+                  >
+                    Voltar
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="btn btn--primary"
+                    onClick={handleTentarDeNovo}
+                  >
+                    Tentar de novo
+                  </button>
+                  <button
+                    className="btn btn--secondary"
+                    onClick={onBack}
+                    style={{ marginTop: "0.5rem" }}
+                  >
+                    Voltar
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}
