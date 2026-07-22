@@ -469,13 +469,20 @@ export async function uploadRecoveryShare(shareBlob: string): Promise<boolean> {
 
 /** Busca a share 1 (criptografada com PIN) do backend.
  *  Endpoint: GET /usuarias/me/recovery-share (auth required).
- *  Retorna o blob base64, ou null se não houver share armazenada (404) ou falhar. */
-export async function fetchRecoveryShare(): Promise<string | null> {
+ *  Retorna o blob base64, ou null se não houver share armazenada (404) ou falhar.
+ *
+ *  `token` opcional: se o caller já fez login e tem o token em mãos
+ *  (ex.: fluxo de recuperação em novo dispositivo), passe direto para
+ *  evitar o round-trip `getMe` do `ensureToken` — esse round-trip pode
+ *  falhar por race condition/latência e quebrar a recuperação mesmo com
+ *  PIN correto (BUG 3). Se omitido, cai em `ensureToken` (comportamento
+ *  histórico — usado por callers que já têm sessão estabelecida). */
+export async function fetchRecoveryShare(token?: string): Promise<string | null> {
   try {
-    const token = await ensureToken();
-    if (!token) return null;
+    const t = token ?? (await ensureToken());
+    if (!t) return null;
     const resp = await fetch(`${API_BASE}/usuarias/me/recovery-share`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${t}` },
     });
     if (resp.status === 404) return null;
     if (!resp.ok) return null;

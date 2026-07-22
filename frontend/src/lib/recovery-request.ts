@@ -69,6 +69,7 @@ import {
   login,
   setToken,
   setIdentificador,
+  setPin,
   fetchRecoveryShare,
 } from "../api";
 
@@ -145,13 +146,22 @@ export async function startRecoveryRequest(
   // 4. Autentica no backend com (identificador, pin) e busca a share 1.
   // A dona está num dispositivo novo — precisa fazer login para obter
   // token antes de GET /usuarias/me/recovery-share.
+  //
+  // Defesa em profundidade (BUG 3): chamamos setPin(pin) além de
+  // setIdentificador + setToken. Assim, se o token direto abaixo falhar
+  // por qualquer motivo (race, latência, backend reiniciado), o
+  // ensureToken() consegue re-logar com o PIN — sem setPin, getPin()
+  // retornaria null e a recuperação quebraria mesmo com PIN correto.
   let backendShare: Uint8Array | null = null;
   try {
     setIdentificador(identificador);
+    setPin(pin);
     const loginResp = await login(identificador, pin);
     if (loginResp) {
       setToken(loginResp.token);
-      const blob = await fetchRecoveryShare();
+      // Passa o token direto para evitar o round-trip getMe do
+      // ensureToken — mais robusto contra race condition/latência.
+      const blob = await fetchRecoveryShare(loginResp.token);
       if (blob) {
         backendShare = await decryptWithPin(blob, pin);
       }

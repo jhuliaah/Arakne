@@ -168,6 +168,10 @@ export default function FinancialPage({
   const [error, setError] = useState<string | null>(null);
   const [convite, setConvite] = useState<ConviteResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  // Estado separado para o botão "Copiar" do próprio código de convite
+  // (seção Tecelã de confiança) — não compartilha com o `copied` do
+  // convite de aprendiz nem com o copia-e-cola do Pix.
+  const [codigoConviteCopied, setCodigoConviteCopied] = useState(false);
 
   // Fornecedoras de Linha (Ponto de Troca)
   const [pontos, setPontos] = useState<PontoDeTroca[]>([]);
@@ -337,7 +341,7 @@ export default function FinancialPage({
   const handleVincularTecela = async () => {
     const codigo = tecelaCodigo.trim();
     if (!codigo) {
-      setTecelaError("Digite o código da tecelã que você quer convidar.");
+      setTecelaError("Digite o código de convite da tecelã que você quer convidar.");
       return;
     }
     setTecelaSubmitting(true);
@@ -352,7 +356,9 @@ export default function FinancialPage({
       const msg = e instanceof Error ? e.message : "";
       // Mensagem disfarçada: nunca vaza "recuperação", "chave", etc.
       if (/n[ãa]o encontr|inv[áa]lid|inexistente|n[ãa]o existe/i.test(msg)) {
-        setTecelaError("Não encontrei essa tecelã — confira o código.");
+        setTecelaError(
+          "Não encontrei essa tecelã — confira o código de convite dela (não o identificador dela)."
+        );
       } else if (/j[áa]|preenchido|slot|limite|m[áa]ximo/i.test(msg)) {
         setTecelaError("Seu ateliê já tem uma tecelã de confiança.");
       } else {
@@ -1036,17 +1042,22 @@ export default function FinancialPage({
               </p>
               <div className="field" style={{ marginBottom: "0.5rem" }}>
                 <label className="field__label" htmlFor="tecelaCodigo">
-                  Código da tecelã
+                  Código de convite da tecelã
                 </label>
                 <input
                   id="tecelaCodigo"
                   className="field__input"
                   type="text"
-                  placeholder="Cole aqui o código que ela te passou"
+                  placeholder="Cole aqui o código de convite da tecelã"
                   value={tecelaCodigo}
                   onChange={(e) => setTecelaCodigo(e.target.value)}
                   disabled={tecelaSubmitting}
                 />
+                <p className="field__hint">
+                  Peça à tecelã o código de convite dela (ela encontra em
+                  "Meu código de convite" no ateliê dela). Não cole o
+                  identificador dela — são códigos diferentes.
+                </p>
               </div>
               {tecelaError && <p className="field__error">{tecelaError}</p>}
               {tecelaSuccess && <p className="field__hint">{tecelaSuccess}</p>}
@@ -1057,6 +1068,42 @@ export default function FinancialPage({
               >
                 {tecelaSubmitting ? "Convidando…" : "Convidar tecelã para o ateliê"}
               </button>
+
+              {/* Meu código de convite — para a usuária poder copiar e
+                  passar à outra tecedora que vai vinculá-la como tecelã
+                  de confiança. O codigo_indicacao vem direto do /me
+                  (qualquer tier), não depende do getConvite (tier 3+). */}
+              {usuaria?.codigo_indicacao && (
+                <div className="consent-note" style={{ marginTop: "0.75rem" }}>
+                  <p className="field__label" style={{ marginBottom: "0.4rem" }}>
+                    Seu código de convite
+                  </p>
+                  <p className="field__hint" style={{ marginBottom: "0.5rem" }}>
+                    Compartilhe este código com a tecedora que vai te
+                    convidar para o ateliê dela.
+                  </p>
+                  <div className="financial__invite-link">
+                    <input
+                      type="text"
+                      readOnly
+                      value={usuaria.codigo_indicacao}
+                      className="financial__invite-input"
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                      aria-label="Seu código de convite"
+                    />
+                    <button
+                      className="financial__btn financial__btn--small"
+                      onClick={() => {
+                        navigator.clipboard.writeText(usuaria.codigo_indicacao);
+                        setCodigoConviteCopied(true);
+                        setTimeout(() => setCodigoConviteCopied(false), 2000);
+                      }}
+                    >
+                      {codigoConviteCopied ? "Copiado!" : "Copiar"}
+                    </button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
