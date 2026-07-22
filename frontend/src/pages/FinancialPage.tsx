@@ -42,7 +42,7 @@ interface FinancialPageProps {
   onAbrirScanner: () => void;
   prefilledPontoIdentificador?: string | null;
   onPrefillConsumed?: () => void;
-  /** Abre a tela de transação da carteira (pagar/receber/quitar). */
+  /** Abre a tela de transação da cesta de novelos (entregar/receber/devolver). */
   onAbrirCarteira: (modo: CarteiraModo) => void;
 }
 
@@ -250,7 +250,7 @@ export default function FinancialPage({
   // Confirmação de "Puxar novelos" (substitui a exibição da invoice)
   const [liberadoDisplay, setLiberadoDisplay] = useState<Emprestimo | null>(null);
 
-  // ── Carteira Arakne ────────────────────────────────────────
+  // ── Cesta de novelos (carteira) ───────────────────────────
   // Saldo da carteira interna (sats + BRL). Buscado no mount e
   // refrescado quando a usuária volta da tela de transação.
   const [saldoCarteira, setSaldoCarteira] = useState<SaldoCarteira | null>(null);
@@ -330,7 +330,7 @@ export default function FinancialPage({
     setTecelas(tecelasData ?? []);
     setTecelasLoading(false);
 
-    // Load saldo da carteira (best-effort — o endpoint pode não
+    // Load saldo da cesta de novelos (best-effort — o endpoint pode não
     // existir ainda se a Lane A ainda não terminou).
     const saldo = await getSaldoCarteira();
     if (saldo) setSaldoCarteira(saldo);
@@ -800,16 +800,17 @@ export default function FinancialPage({
           </button>
         )}
 
-        {/* ── Carteira Arakne ───────────────────────────────────
+        {/* ── Cesta de novelos (carteira) ────────────────────────
             Card de saldo da carteira interna (sats + BRL). Disfarce:
-            "Carteira" + "Saldo" + "Cotação do fio". Os botões falam
-            em "Pagar", "Receber" e "Devolver novelos" (vocabulário
-            já existente). sats aparece em texto pequeno, como detalhe. */}
+            "Cesta de novelos" + "Seus novelos" + "Valor do novelo".
+            Os botões falam em "Entregar novelos", "Receber novelos" e
+            "Devolver novelos" (vocabulário já existente). sats aparece
+            em texto pequeno, como detalhe. */}
         <div className="financial__invite carteira-card">
-          <h3 className="financial__history-title">Carteira</h3>
+          <h3 className="financial__history-title">Cesta de novelos</h3>
           <div className="carteira-card__saldo">
             <div className="carteira-card__linha">
-              <span className="carteira-card__label">Saldo</span>
+              <span className="carteira-card__label">Seus novelos</span>
               <span className="carteira-card__valor">
                 {saldoCarteira
                   ? brlFormatter.format(saldoCarteira.saldo_brl)
@@ -825,7 +826,7 @@ export default function FinancialPage({
           </div>
           {saldoCarteira && saldoCarteira.cotacao_btc_brl > 0 && (
             <p className="carteira-card__cotacao">
-              Cotação do fio: 1 BTC = {brlFormatter.format(saldoCarteira.cotacao_btc_brl)}
+              Valor do novelo: 1 BTC = {brlFormatter.format(saldoCarteira.cotacao_btc_brl)}
             </p>
           )}
           <div className="carteira-card__botoes">
@@ -833,13 +834,13 @@ export default function FinancialPage({
               className="financial__btn financial__btn--small"
               onClick={() => onAbrirCarteira("pagar")}
             >
-              Pagar
+              Entregar novelos
             </button>
             <button
               className="financial__btn financial__btn--small"
               onClick={() => onAbrirCarteira("receber")}
             >
-              Receber
+              Receber novelos
             </button>
             {(usuaria?.saldo_devedor ?? 0) > 0 && (
               <button

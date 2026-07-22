@@ -1,6 +1,6 @@
-/** CarteiraTransacaoPage — tela de transação da carteira Arakne.
+/** CarteiraTransacaoPage — tela de transação da cesta de novelos.
  *
- *  Três modos de operação, escolhidos pelo card "Carteira" no
+ *  Três modos de operação, escolhidos pelo card "Cesta de novelos" no
  *  FinancialPage:
  *    - "pagar": envia Pix para um comerciante (chave + valor em BRL).
  *      O backend debita sats da carteira interna e faz a conversão.
@@ -10,10 +10,10 @@
  *      O backend gera a cobrança; quando confirmada, o saldo devedor
  *      cai. Mesmo fluxo de QR + polling do "receber".
  *
- *  Disfarce crochê: a tela fala em "fios" e "novelos", nunca em
- *  Bitcoin/sats em destaque. O valor em sats aparece em texto pequeno,
- *  como detalhe técnico ao lado do valor em BRL. Países são
- *  apresentados como "De onde você está criando hoje?".
+ *  Disfarce crochê: a tela fala em "novelos", nunca em Bitcoin/sats
+ *  em destaque. O valor em sats aparece em texto pequeno, como detalhe
+ *  técnico ao lado do valor em BRL. Países são apresentados como
+ *  "De onde você está criando hoje?".
  *
  *  Conexão com o backend (Lane A):
  *    - POST /carteira/pagar → envia Pix (modo "pagar")
@@ -474,7 +474,7 @@ export default function CarteiraTransacaoPage({
   const centavos = parseBrlParaCentavos(valorBrl);
   const satsQuitar = parseInt(valorSats, 10) || 0;
   const tituloModo =
-    modo === "pagar" ? "Pagar fios" : modo === "receber" ? "Receber fios" : "Devolver novelos";
+    modo === "pagar" ? "Entregar novelos" : modo === "receber" ? "Receber novelos" : "Devolver novelos";
 
   // ── Render ───────────────────────────────────────────────
   return (
@@ -494,7 +494,7 @@ export default function CarteiraTransacaoPage({
           <div className="financial__invite">
             <h3 className="financial__history-title">De onde você está criando hoje?</h3>
             <p className="financial__invite-text">
-              Isso nos ajuda a oferecer as opções de pagamento certas
+              Isso nos ajuda a oferecer as opções de entrega certas
               para o seu fio.
             </p>
             <div className="field" style={{ marginBottom: "0.75rem" }}>
@@ -530,8 +530,8 @@ export default function CarteiraTransacaoPage({
           <div className="financial__invite">
             <h3 className="financial__history-title">{tituloModo}</h3>
             <p className="financial__invite-text">
-              Pagamentos em moeda local em breve. Por enquanto, pagamentos
-              via Pix estão disponíveis apenas no Brasil.
+              Entrega de novelos em breve nesta região. Por enquanto, a
+              entrega de novelos está disponível apenas no Brasil.
             </p>
             <button
               className="financial__btn financial__btn--small financial__btn--secondary"
