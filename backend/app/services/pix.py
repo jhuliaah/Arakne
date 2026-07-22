@@ -43,6 +43,7 @@ class MercadoPagoPixService:
         self.access_token = access_token
         self.base_url = base_url.rstrip("/")
         self._mock = not bool(access_token)
+        self._is_test_credential = access_token.startswith("TEST-")
 
     @property
     def is_mock(self) -> bool:
@@ -92,6 +93,9 @@ class MercadoPagoPixService:
         if self._mock:
             return self._mock_cobranca(valor_brl, txid)
         try:
+            payer: dict = {"email": f"{txid}@example.com"}
+            if self._is_test_credential:
+                payer["first_name"] = "APRO"
             with httpx.Client(timeout=15) as client:
                 resp = client.post(
                     f"{self.base_url}/v1/payments",
@@ -102,11 +106,8 @@ class MercadoPagoPixService:
                         "payment_method_id": "pix",
                         "external_reference": txid,
                         "notification_url": MP_WEBHOOK_URL or None,
-                        # Mercado Pago exige um payer com e-mail; como não
-                        # guardamos identidade real, usamos um e-mail
-                        # sintético por txid (não é usado pra contato).
-                        "payer": {"email": f"{txid}@example.com"},
-                    },
+                        "payer": payer,
+                    }
                 )
                 resp.raise_for_status()
                 data = resp.json()

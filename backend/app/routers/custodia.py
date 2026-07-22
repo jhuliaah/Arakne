@@ -8,9 +8,17 @@ sozinha move fundos", e isso vale também pra quem registra o que é a
 reserva fria oficial).
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.config import (
+    MULTISIG_DESCRIPTOR,
+    MULTISIG_ENDERECO,
+    MULTISIG_NETWORK,
+    MULTISIG_QUORUM,
+)
 from app.database import get_db
 from app.models.custodia import CustodiaMultisig
 from app.schemas.custodia import CustodiaMultisigResponse, CustodiaMultisigVazia
@@ -32,6 +40,24 @@ def get_reserva_fria(db: Session = Depends(get_db)):
         .order_by(CustodiaMultisig.criado_em.desc())
         .first()
     )
-    if not atual:
-        return CustodiaMultisigVazia()
-    return atual
+    if atual:
+        return atual
+
+    # Sem linha no banco (nenhuma API de escrita existe, de propósito — ver
+    # docstring do módulo): cai pro .env como referência, já que é onde
+    # scripts/gerar_multisig.py manda a pessoa colar o resultado. Isso evita
+    # exigir um passo manual extra de "insira no banco" só pra ler algo que
+    # já está configurado.
+    if MULTISIG_DESCRIPTOR and MULTISIG_ENDERECO:
+        return CustodiaMultisigResponse(
+            descriptor=MULTISIG_DESCRIPTOR,
+            endereco=MULTISIG_ENDERECO,
+            quorum=MULTISIG_QUORUM,
+            total_signatarios=int(MULTISIG_QUORUM.split("-de-")[-1])
+            if "-de-" in MULTISIG_QUORUM
+            else 3,
+            network=MULTISIG_NETWORK,
+            criado_em=datetime.utcnow(),
+        )
+
+    return CustodiaMultisigVazia()
