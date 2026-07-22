@@ -21,6 +21,7 @@ from app.models import (  # noqa: F401 — import so tables are registered
     RecoveryShareBackup,
     PagamentoPix,
     CustodiaMultisig,
+    ConversaoPool,
 )
 from app.routers import (
     avais,

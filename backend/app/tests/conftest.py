@@ -40,6 +40,19 @@ def mock_pix():
     pix._mock = True
 
 
+@pytest.fixture(autouse=True)
+def mock_exchange():
+    """Ensure the Binance client is in mock mode for all tests — envolve
+    dinheiro real (compra + saque), então isso é ainda mais crítico que os
+    outros mocks: nunca deve ser possível rodar a suite de testes e comprar
+    Bitcoin de verdade sem querer."""
+    from app.services.exchange import exchange
+
+    exchange._mock = True
+    yield
+    exchange._mock = True
+
+
 @pytest.fixture
 def db_session():
     """Create a fresh in-memory database for each test."""

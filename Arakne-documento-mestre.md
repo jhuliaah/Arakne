@@ -1,6 +1,8 @@
 # Arakne — Documento Mestre: Mecanismos, Arquitetura e Decisões
 
 > Este documento consolida tudo que foi decidido até agora: o mecanismo central, a arquitetura de cada camada, o racional por trás de cada decisão, o que é MVP de hackathon vs. arquitetura-alvo, e o que ainda está pendente. É o documento de referência único do time — os outros arquivos (adendo de Pix/custódia, wireframes, prompts de IA) continuam existindo, mas este é o ponto de partida.
+>
+> **Atualizado em 21/07/2026** com tudo que foi construído e decidido entre sexta (18/07) e hoje: rail de Pix real, script de custódia multisig, integração Binance (conversão BRL→sats), decisão de usar LNbits hospedado em vez de nó próprio, e a decisão de usar Breez SDK para carteiras individuais das usuárias. As seções 1-17 abaixo são o documento original; as seções 18+ são as adições desta atualização.
 
 **Tagline:** "Cada fio, uma mulher. Cada nó, uma confiança."
 
@@ -11,11 +13,11 @@
 1. Tese e conceito central
 2. Identidade de marca e vocabulário
 3. Motor de crédito — regras determinísticas
-4. Camada de disfarce e mecanismos de revelação
+4. Camada de disfarce e mecanismo de revelação
 5. Ponto Arakne — autenticação e recuperação social
 6. Custódia do fundo
 7. Camada de gasto — modelo Tando via Pix
-8. Disfarce financeiro no rail brasileiro (Pix)
+8. Disfarce financeiro no rail brasileiro (Pix e boleto)
 9. Proteção cambial do empréstimo
 10. Generalização multi-moeda
 11. Modelo de sustentabilidade — juros
@@ -25,6 +27,14 @@
 15. Pendências consolidadas
 16. Roadmap — Camada de investimento (staking do pool)
 17. Documentos relacionados
+18. Rail de Pix real (Mercado Pago) — construído 19-20/07
+19. Custódia multisig — script de geração offline
+20. Conversão BRL→sats (Binance) — o "passo 4" do ciclo financeiro
+21. Carteira Lightning do pool — de nó próprio pra LNbits hospedado
+22. Carteiras individuais das usuárias — decisão Breez SDK
+23. Mecânica de voucher com trava em sats — especificação fechada
+24. Descompassos doc↔código descobertos nesta rodada
+25. Registro de sessões (19-21/07/2026) e prazos
 
 ---
 
@@ -78,7 +88,7 @@ Regras simples e auditáveis de propósito — sem ML, sem score opaco, pra que 
 | 2 | Tier 1 quitado | 15.000 sats |
 | 3 | Tier 2 quitado | 40.000 sats — pode avalizar outras |
 
-**Regras (pseudocódigo já validado):**
+**Regras (pseudocódigo já validado, e confirmado bater com `services/risco.py` real):**
 ```python
 def pode_emprestar(usuaria):
     tier_atual = TIERS[usuaria.tier]
@@ -101,21 +111,23 @@ def ao_atrasar(usuaria, dias_atraso):
         # nunca reduz tier retroativamente — sem punição, só pausa de acesso
 ```
 
+**⚠️ Confirmado em 20/07:** `ao_atrasar()` existe no código e está correta, mas **nunca é chamada em lugar nenhum** — não há scheduler/cron/job no repositório que dispare verificação de atraso. Atraso, hoje, não trava ninguém automaticamente. Ver seção 24.
+
 **Racional:** o primeiro crédito não exige padrão de crochê completo, só aval — ajuda a usuária logo no início, sem barreira de competência antes do primeiro empréstimo. Em troca, o aval deixa de ser gratuito: quem avaliza passa a ter risco real. Isso troca "prova de tarefa" (sinal fraco) por "reputação real em jogo" (sinal forte) — o mesmo princípio validado por Grameen Bank e Zidisha (seção 12).
 
 **Regra central do produto:** a usuária pode sacar com dívida em aberto — isso é intencional, é o ponto inteiro do produto. Ciclo: pedir → sacar → usar no mundo real → depositar → pagar → subir de tier.
+
+**Decisão futura registrada (20/07, ainda não implementada):** hoje o congelamento por atraso trava a usuária inteira (`tier_congelado = True`). No modelo-alvo, será só um **valor específico do saldo dela** que fica congelado, não a conta inteira — ela continua operando com o resto. Registrado como intenção, não escopo do hackathon.
 
 ---
 
 ## 4. Camada de disfarce e mecanismo de revelação
 
-O catálogo de padrões de crochê é a Home pública — e não é uma fachada vazia: é um app de aprendizado de crochê **real e funcional**, com conteúdo genuíno sendo construído pelo time. Isso é o que torna o disfarce robusto — não há nada "falso" pra alguém desconfiado encontrar, porque não existe uma versão fake por trás de uma versão real; existe só o app, inteiro, fazendo o que diz que faz.
+O catálogo de padrões de crochê é a Home pública — e não é uma fachada vazia: é um app de aprendizado de crochê **real e funcional**, com conteúdo genuíno construído pelo time (confirmado 20/07: `models/aula.py`, `trilha.py`, `material.py`, `routers/trilhas.py`, e uma pasta `frontend/public/materiais/` com HTMLs reais de padrões de crochê, bordado, tricô, patchwork). Isso é o que torna o disfarce robusto — não há nada "falso" pra alguém desconfiado encontrar.
 
-**Revelação (mecanismo único):** o card "Ponto Arakne" vive dentro do próprio catálogo de padrões, como mais um item de aprendizado — não é uma tela separada de segurança (ver seção 5 para o mecanismo completo do gesto). Tocar nele e performar o gesto correto revela a camada financeira. Qualquer outra interação — tocar no card e errar o gesto, ou navegar por qualquer outra parte do app — mantém tudo como conteúdo de crochê normal, porque é exatamente isso que é.
+**Revelação (mecanismo único):** o card "Ponto Arakne" vive dentro do próprio catálogo de padrões, como mais um item de aprendizado — não é uma tela separada de segurança (ver seção 5 para o mecanismo completo do gesto). Tocar nele e performar o gesto correto revela a camada financeira. Qualquer outra interação mantém tudo como conteúdo de crochê normal, porque é exatamente isso que é.
 
-**Por que não existe mais uma "tela decoy" separada:** num desenho anterior, um segundo gesto secreto levava a uma tela decoy dedicada, pensada para o cenário de alguém forçar a usuária a "provar" o app. Isso deixou de ser necessário: como o app inteiro já é genuíno por padrão, e como errar o gesto do Ponto Arakne já mostra conteúdo comum sem nenhum rastro (seção 5), a própria superfície do app cumpre esse papel o tempo todo — não é preciso um segundo mecanismo secreto pra chegar lá. Um gesto a menos pra lembrar sob estresse.
-
-**Depois da revelação, o disfarce continua.** A camada financeira usa o mesmo vocabulário de disfarce da seção 2 — nenhum termo financeiro real aparece, mesmo já dentro da parte revelada. Do ponto de vista de quem olhar a tela por cima do ombro dela, mesmo depois do "sim", ainda parece um app de costura.
+**Depois da revelação, o disfarce continua.** A camada financeira usa o mesmo vocabulário de disfarce da seção 2 — nenhum termo financeiro real aparece, mesmo já dentro da parte revelada.
 
 ---
 
@@ -123,264 +135,318 @@ O catálogo de padrões de crochê é a Home pública — e não é uma fachada 
 
 ### 5.1 O mecanismo
 
-O **Ponto Arakne** é um gesto/padrão que a própria usuária cria — não é senha ou PIN predefinido. Propositalmente difícil de configurar (fricção alta na criação, pra não ser trivial de adivinhar ou reproduzir sob observação) e fácil de sair (saída rápida de volta ao disfarce, inclusive sob coação).
+O **Ponto Arakne** é um gesto/padrão que a própria usuária cria — não é senha ou PIN predefinido. Propositalmente difícil de configurar e fácil de sair (saída rápida de volta ao disfarce, inclusive sob coação).
 
-**Nome do card (decisão fechada):** o card se chama "Ponto Arakne" — mesmo nome do produto — de propósito. Isso funciona porque (a) o padrão visual por trás do nome é único e aleatório por usuária, então pesquisar "Ponto Arakne" na internet não revela o gesto de ninguém, só o nome genérico; e (b) a mitologia do produto já justifica a existência dele — "pra ser uma Arakne, você precisa ter esse ponto feito" é verdade dentro da própria narrativa da marca, então ela pode explicar isso a qualquer pessoa sem soar como desculpa.
+**Nome do card (decisão fechada):** o card se chama "Ponto Arakne" — mesmo nome do produto — de propósito, porque o padrão visual por trás do nome é único e aleatório por usuária, e a mitologia do produto já justifica a existência dele.
 
 ### 5.2 Recuperação social
 
-Se a usuária erra o Ponto Arakne **8 vezes** (as pernas da aranha), o Ponto trava — deixa de funcionar como credencial. Não existe "tentar de novo": o card passa a mostrar um ponto de crochê genérico qualquer, sem nenhum indício de que ali existia uma credencial financeira.
+Se a usuária erra o Ponto Arakne **8 vezes**, o Ponto trava. A recuperação usa um **vouch de recuperação** (sem consequência financeira), com divulgação progressiva de dois elos por vez, escalonamento 24h/12h/6h..., até as fundadoras como âncora de última instância, **sem override administrativo**.
 
-A recuperação usa um **vouch de recuperação** — tipo de vouch diferente do vouch de crédito, sem consequência financeira (quem ajuda não assume risco de tier), condicionado a quem recebe o pedido se sentir segura para ajudar.
+**⚠️ Atualização importante, confirmada em 20/07:** este mecanismo **já ganhou implementação real e substancial** por Julia (branch `juliamsteodoro`, mergeada em `DiOliver`) — não é mais só especificação. Arquivos confirmados no repositório:
+- `frontend/src/lib/nostr-keys.ts` — geração de chaves Nostr
+- `frontend/src/lib/gift-wrap.ts` — implementação de NIP-59 (gift wrap, mensagens criptografadas)
+- `frontend/src/lib/ssss.ts` — Shamir's Secret Sharing (divisão de segredo em partes — provavelmente o mecanismo real por trás da "divulgação progressiva, dois elos por vez")
+- `frontend/src/lib/recovery-request.ts`, `recovery-respond.ts`, `recovery-distribute.ts` — o fluxo de pedido/resposta/distribuição de recuperação
+- `frontend/src/components/RecoveryBell.tsx`, `RecoveryQRGenerator.tsx`, `RecoveryScanner.tsx` — UI do fluxo
+- `backend/app/models/avalista_recuperacao.py`, `recovery_share_backup.py` — persistência backend
+- `backend/app/tests/test_recuperacao_nostr.py`, `test_recovery_share_backup.py` — testes
 
-**Fluxo completo:**
-1. Ela gera um QR code de recuperação (⚠️ tela ainda a desenhar) para outra integrante da rede escanear — o processo não recomeça sozinho, ela precisa iniciar.
-2. O pedido chega primeiro para quem originalmente fez vouch por ela, com mensagem disfarçada: *"Uma de suas aranhinhas pediu uma aula sobre o Ponto Arakne, pode ajudar?"*
-3. **Divulgação progressiva, dois elos por vez:** quem aceita ajudar não vê a identidade de quem precisa de ajuda — vê só os dois próximos apelidos na cadeia de vouch, e precisa contatar essa pessoa pessoalmente, fora do app, pra continuar repassando. Se o contato não acontecer em algum ponto da cadeia, nada além disso é exposto e nada acontece — mesmo princípio de "se nada puder ser feito, nada pode ser feito" aplicado à privacidade do grafo.
-4. Se a pessoa no topo da escalada não responder dentro da janela de tempo, o pedido sobe um nível na cadeia de vouch, com mensagem ajustada: *"...as outras estão ocupadas, pode ajudar?"*
-5. **Tempos de escalonamento (decisão fechada, mantidos mesmo com o relay manual):** 24h no 1º nível, 12h no 2º, 6h no 3º, metade do anterior daí em diante. Racional: cenário de risco de vida exige velocidade, não conveniência — um toque da pessoa seguinte costuma bastar pra reengajar quem só estava ocupada.
-6. A cadeia pode escalar até as fundadoras (raiz do grafo de vouch, por serem as primeiras usuárias) como âncora de última instância. Aceitável para o MVP; não escala sozinho em produção.
-7. **Sem override administrativo.** Se a cadeia inteira não responder, a conta permanece travada — nem a Arakne consegue destravar sozinha. Essa garantia é o que torna o mecanismo seguro contra um agressor que descobre e pressiona quem teria esse poder.
-8. **Só depois do "sim" da rede**, aparece uma "aula de um ponto novo" — um ponto de crochê genuíno e aleatório, cuja coreografia de gesto *é*, ao mesmo tempo, a definição do novo Ponto Arakne. Nunca uma tela óbvia de "crie sua nova senha".
-9. **Completar a aula não entra na camada financeira** — ela volta pro catálogo de padrões, não pro dashboard financeiro. Recuperar a credencial e revelar o financeiro continuam sendo dois atos separados: ela ainda precisa tocar no card e performar o Ponto novo deliberadamente depois (seção 4) — a recuperação não a leva direto pro financeiro.
-
-**Acesso a partir de outro dispositivo** só é possível de duas formas: (a) as chaves da carteira + o Ponto Arakne dela, ou (b) recuperação social pelo fluxo acima.
+**Isto ainda não foi lido/auditado por Claude nesta sessão** — só confirmado que existe e que os testes passam (118 testes totais incluindo esses, verde). Antes de presumir qualquer coisa sobre como funciona exatamente, ler o código real primeiro — mesmo princípio de "doc/memória vs. código real" que já mordeu o time duas vezes (Pix, seção 24).
 
 ### 5.3 Custódia da chave da carteira
 
-A chave (formato nativo nostr, `nsec...`) fica a critério da própria usuária: ela pode anotar e guardar sozinha, ou deixar uma cópia com alguém de confiança específica — uma "elder" da comunidade ou uma amiga. Não é um mecanismo técnico, é uma prática deixada aberta de propósito, porque acesso por outro dispositivo exige as duas coisas juntas (chave **+** Ponto Arakne), então perder só uma não é suficiente pra travar nem pra vazar sozinha.
+A chave (`nsec...`) fica a critério da própria usuária — anotar sozinha ou deixar com alguém de confiança. Acesso por outro dispositivo exige chave **+** Ponto Arakne juntos.
 
-**Ressalva registrada, não resolvida:** deixar a chave com uma pessoa específica troca risco técnico por risco relacional — se o vínculo de confiança mudar depois, a chave continua com essa pessoa. Aceito como decisão para o hackathon; usar o formato nativo do nostr (em vez de mascarar como algo mais discreto) também é uma concessão consciente — `nsec1...` é reconhecível por quem conhece cripto/nostr, algo menor que uma seed phrase de 12 palavras em inglês, mas não nulo.
+### 5.4 Por que é intencional
 
-### 5.4 Por que é intencional, não só "esqueci minha senha"
-
-O mecanismo dá à usuária a opção de **se trancar de propósito**. Sob coação, esgotar as tentativas deliberadamente é uma saída válida: os recursos ficam intactos e inacessíveis, e destravar exige um passo social que o agressor não consegue forçar sozinho.
+Sob coação, esgotar as tentativas deliberadamente é uma saída válida.
 
 ---
 
 ## 6. Custódia do fundo
 
-**Problema que resolve:** o mecanismo de vouch/tier exige que alguém tenha poder de decisão sobre saldo e liberação — incompatível com "cada usuária com chave privada non-custodial de verdade" (ex.: Breez SDK puro). Uma carteira de **custódia compartilhada** resolve isso sem fingir que o produto é algo que não é.
+**Problema que resolve:** o mecanismo de vouch/tier exige que alguém tenha poder de decisão sobre saldo e liberação — incompatível com "cada usuária com chave privada non-custodial de verdade". Uma carteira de **custódia compartilhada** resolve isso sem fingir que o produto é algo que não é.
 
-**Estrutura-alvo:**
-- **Reserva fria (multisig on-chain, 2-de-3 ou 3-de-5):** a maior parte do fundo, sob controle coletivo de stewards de confiança — nenhuma parte sozinha move fundos. É aqui que mora a custódia compartilhada de fato.
-- **Liquidez quente (nó Lightning):** saldo operacional menor, rebalanceado a partir da reserva fria, viabiliza liberação e liquidação instantâneas.
-- **Ledger interno:** o saldo de cada usuária continua sendo uma linha no banco (`saldo_sats`, `saldo_devedor`) — isso não muda.
+**Estrutura-alvo:** reserva fria multisig (2-de-3 ou 3-de-5) + liquidez quente (nó Lightning) + ledger interno (`saldo_sats`, `saldo_devedor` no banco).
 
-**Por que é honesto, não uma contradição:** o produto não precisa fingir ser totalmente non-custodial — ele é um fundo com custódia compartilhada e governança coletiva, parecido com uma cooperativa de crédito (seção 12). É uma resposta mais forte no pitch do que tentar encaixar non-custodial puro num mecanismo que precisa congelar tier em caso de default.
+**⚠️ Atualização crítica, decidida em 21/07 (ver seção 21 para o racional completo):** o plano original desta seção assumia um **nó Lightning próprio** (LND + Bitcoin Core, ambos em `docker-compose.yml`, configurados em **regtest**). Descobriu-se em 21/07 que **regtest não tem conexão nenhuma com a rede Lightning real** — um nó regtest não consegue receber um pagamento Lightning de verdade vindo de fora (ex.: um saque da Binance). Decisão tomada: para o MVP do hackathon, o pool usa uma instância **hospedada** do LNbits (`legend.lnbits.com`, mainnet real, gratuita, sem KYC) em vez do nó Docker próprio. Isso é documentado como **decisão de MVP, não arquitetura-alvo** — a reserva fria própria (seção 21) continua sendo o objetivo de produção.
+
+**Por que é honesto, não uma contradição:** o produto não precisa fingir ser totalmente non-custodial — ele é um fundo com custódia compartilhada e governança coletiva, parecido com uma cooperativa de crédito (seção 12).
 
 ---
 
 ## 7. Camada de gasto — modelo Tando via Pix
 
-O [Tando](https://tando.me/) deixa qualquer pessoa no Quênia gastar Bitcoin em qualquer lugar que aceite M-Pesa, sem o lojista saber ou se importar com Bitcoin — modelo BYOB(W), nunca custodia o saldo do usuário. O paralelo com o Arakne é direto: **Pix no lugar de M-Pesa**, com a diferença de que o dinheiro gasto é crédito do fundo compartilhado, não saldo próprio.
+O [Tando](https://tando.me/) deixa qualquer pessoa no Quênia gastar Bitcoin em qualquer lugar que aceite M-Pesa. O paralelo com o Arakne é direto: **Pix no lugar de M-Pesa**.
 
-| Tando (M-Pesa) | Arakne (Pix) | Status |
+| Tando (M-Pesa) | Arakne (Pix) | Status confirmado em 20/07 |
 |---|---|---|
-| Escanear QR Code | Scanner de QR Pix (BR Code) | ✅ construído — parser EMV/TLV com CRC16/CCITT-FALSE |
-| Buy Goods | Pagar comerciante | ✅ mesma infra do scanner |
-| Pay Bills | Pagar contas (boleto/Pix) | ✅ mesma infra |
-| Send Money | Enviar por chave Pix, sem QR | ⚠️ falta construir |
-| Cotação antes de confirmar | Serviço de cotação com trava de câmbio | ✅ construído |
-| Liquidação instantânea | Cliente PSP com idempotência | ✅ construído, com tratamento de timeout vs. falha |
-
-**Conclusão:** ~80% do "motor Tando" já existe da sprint de Pix. Falta (a) enviar por chave Pix sem QR, e (b) reposicionar a UI como a experiência central de "gastar o kit", não como saque genérico.
+| Escanear QR Code | Scanner de QR Pix (BR Code) | ⚠️ Não construído — o parser de leitura de QR de terceiros não existe |
+| Cotação antes de confirmar | Serviço de cotação com trava de câmbio | ⚠️ Não construído — seção 9 segue não implementada |
+| Liquidação instantânea | Cliente PSP com idempotência | ✅ **Construído e testado com Mercado Pago real** (seção 18) |
 
 ---
 
 ## 8. Disfarce financeiro no rail brasileiro (Pix e boleto)
 
-> Específico do Brasil — cada país vai precisar da própria versão desta seção (ver seção 10, item 3).
+O desembolso é fácil de disfarçar (Pix de conta com nome comercial inofensivo). O **repagamento** é o ponto cego, resolvido via **Pix Cobrança dinâmico** (ver seção 18 — construído e testado com o Mercado Pago real em 20/07).
 
-O desembolso (Arakne → usuária) é fácil de disfarçar: chega como Pix recebido de conta com nome comercial inofensivo. O **repagamento** é o ponto cego: é uma transferência que sai da conta dela, aparece no app do banco dela (fora do controle do Arakne), e o Pix exige mostrar o nome real do destinatário antes de enviar — proteção antifraude do próprio rail, que não dá pra contornar só com UI.
-
-**Requisitos de design:**
-1. **Pessoa jurídica real com nome comercial inofensivo recebendo os pagamentos** (ex.: "Ateliê Fio de Ouro Materiais Artesanais") — precisa ser CNPJ de verdade, pois é esse nome que aparece na tela de confirmação do banco dela.
-2. Mesma identidade nos dois sentidos (desembolso e repagamento) — narrativa coerente.
-3. Evitar padrão de parcela — variar valores, evitar datas fixas repetidas.
-4. Descrição do Pix sempre temática, nunca "empréstimo" ou "Arakne".
-5. Canal alternativo sem passar pelo banco dela: boleto em casa lotérica, ou agente de confiança fazendo o Pix por ela (infra do parser de boleto já existe).
-
-**Estado atual (MVP hackathon):** conta Pix pessoal da fundadora. Funciona para demo entre a equipe, mas o nome exposto na confirmação é o nome real dela — o item 1 acima é o que resolve isso, e depende de investimento + abertura de PJ.
-
-### Atribuição de repagamento: Pix Cobrança em vez de chave fixa
-
-**O problema que isso resolve:** receber Pix numa chave fixa não diz, por si só, de qual usuária pseudônima veio o pagamento — e tentar descobrir isso pelo nome/CPF de quem enviou exigiria o Arakne guardar um mapa "identidade real ↔ usuária pseudônima", que é, sozinho, um ponto único de exposição catastrófica se vazar, for invadido, ou for alvo de uma ordem judicial.
-
-**Mecanismo escolhido:** cada repagamento gera um **QR de Pix Cobrança dinâmico**, próprio daquela transação, com um `txid` único embutido — a mesma lógica do "nosso número" de um boleto (seção anterior), aplicada ao Pix. Quando ela paga aquele QR específico, o webhook do PSP volta com o `txid`, e a atribuição é automática e inequívoca, não importa de qual conta bancária ela mandou. **Princípio geral:** referência única por transação é sempre preferível a mapear identidade real — evita o mapa inteiro, não só protege ele.
-
-**Depósito sem identificação (Pix direto pra uma chave fixa, por exemplo, em vez do Pix Cobrança) vai para o fundo como capital, sem obrigação de pagamento de juros** — e não quita o `saldo_devedor` dela, já que não há como atribuir o pagamento a uma usuária específica. Vale ter uma comunicação clara pra ela sobre isso: pagar de um jeito não rastreável não conta como pagamento do kit, mesmo que o dinheiro entre no fundo.
-
-**Não implementado ainda (ver seção 15):** hoje a stack só tem a capacidade de *ler* QR de terceiros (fluxo de gasto, seção 7); gerar um QR de cobrança próprio por transação é capacidade nova.
-
-### Boleto como canal de repagamento
-
-Um boleto emitido pela Arakne (não pelo Pix) é outro caminho de repagamento, com vantagens próprias: pode ser pago em dinheiro, em qualquer banco, lotérica, ou farmácia/supermercado que aceite esse tipo de cobrança — sem precisar passar pelo app do banco dela.
-
-**Sobre a flutuação cambial no momento da emissão:** não é um problema novo. O mecanismo da seção 9 já fixa a dívida dela em moeda local, então o valor do boleto fica igualmente fixo entre a emissão e o pagamento, não importa quantos dias se passem ou quanto o BTC varie nesse meio-tempo — o fundo absorve a diferença na conversão final, exatamente como já desenhado. Um boleto, por ser um instrumento de valor fixo por natureza, encaixa bem nesse mecanismo — até melhor que o Pix, que depende de uma trava de cotação de 60 segundos pensada pra uma transação ao vivo.
-
-**Emissão:** boleto pode ser emitido por pessoa física, sem CNPJ, por várias plataformas (ex.: Efí Bank, InfinitePay, Cobre Fácil). Mas o beneficiário/cedente que aparece no boleto **precisa ser "Arakne"**, com o nome de crochê inofensivo — nunca o nome pessoal de quem está por trás. O nome dela como **pagante** pode aparecer normalmente; isso não compromete o disfarce, porque não é incomum ou suspeito que ela mesma pague algo pelo próprio banco — o que precisa ficar disfarçado é o destino do pagamento, não a origem. Vale confirmar com a plataforma escolhida se dá pra configurar um nome fantasia como cedente mesmo numa conta pessoa física (algumas parecem permitir, mas isso ainda não foi validado na prática) — se não der, a mesma PJ que resolve o Pix (item 1 acima) resolve o boleto também, é a mesma dependência.
-
-**Não precisa imprimir.** O boleto tem uma linha digitável (código numérico) e um código de barras — ambos pagáveis 100% digital: ela digita a linha digitável direto no app do banco ou num caixa eletrônico, ou mostra o código de barras na tela do próprio celular pra alguém escanear. Isso importa especialmente pro público do Arakne, que muitas vezes não tem acesso seguro ou discreto a uma impressora.
-
-**Detalhe técnico a configurar:** boletos têm data de vencimento, e algumas plataformas bloqueiam pagamento depois disso — vale configurar aceite de pagamento em atraso, ou um fluxo simples de reemissão, porque a realidade da usuária pode não permitir pagar exatamente na janela prevista.
-
-**Outros canais alternativos, além do boleto:**
-- **Boleto pago em espécie no guichê:** já cai na mesma atribuição por referência única do boleto (seção anterior) — resolve "quero pagar em dinheiro" sem reintroduzir a necessidade de um mapa identidade-real ↔ usuária.
-- **Lotérica mediando um Pix:** ela entrega o dinheiro em espécie, o atendente faz a transferência — uma versão institucionalizada do agente de confiança já mencionado no item 5 acima. Vale usar o mesmo Pix Cobrança dinâmico aqui também, pra manter a atribuição automática.
+**Estado atual (MVP hackathon):** conta Pix pessoal da fundadora, via Mercado Pago (Checkout Transparente, credenciais de teste `TEST-...`). PJ com nome comercial inofensivo continua pendente de investimento.
 
 ---
 
 ## 9. Proteção cambial do empréstimo
 
-**O problema:** dois riscos de volatilidade, separados por ordem de grandeza — volatilidade de tesouraria (minutos, ~0,15%, já coberta pelo spread da cotação travada) e volatilidade de denominação do empréstimo (semanas/meses, ~15-25%, que é o problema real). Dívida em sats com renda em moeda local é um descasamento cambial estrutural, o mesmo mecanismo que torna dívida soberana dolarizada perigosa em mercados emergentes.
+**Mecanismo escolhido:** denominação na moeda local + fundo absorve a diferença.
 
-**Mecanismo escolhido:** denominação na moeda local + fundo absorve a diferença. Não são duas opções concorrentes — denominar em moeda local só funciona se o fundo absorver o resultado cambial.
-1. Empréstimo concedido com valor fixo em moeda local (ex.: R$150), convertido a sats na cotação do dia.
-2. O preço do BTC varia livremente durante o prazo — não afeta o que ela deve.
-3. Repagamento no mesmo valor fixo em moeda local, convertido a sats na cotação do dia do pagamento.
-4. A diferença é absorvida pelo fundo, não pela mutuária.
+**⚠️ Ainda não implementado, confirmado em 20/07:** o endpoint de cobrança Pix (seção 18) recebe `valor_sats` e `valor_centavos_brl` como dois números independentes, informados por quem chama a API — não há conversão/cotação automática ligando os dois ainda. Isso é uma simplificação consciente, documentada no próprio código (`schemas/pix.py`).
 
-Stablecoin local e hedge com derivativos ficam como notas de roadmap (risco de contraparte/liquidez rasa, e complexidade operacional demais para o hackathon, respectivamente).
-
-**Dimensionamento do buffer:** limitar o livro de empréstimos ativos a uma fração do fundo total (ex.: 30-50%), mantendo o resto como colchão — equivalente a um índice de capital adequado, mas para risco cambial. A reserva fria da seção 6 *é* esse colchão. Refinamento opcional: banda de proteção (±10%, excedente dividido meio a meio) em vez de indexação total, se quiserem reduzir o risco de cauda do fundo.
+**Aplicação do mesmo princípio no lado do repagamento (nova, seção 20):** quando o BRL do repagamento é convertido em sats de volta pro pool, o valor **sacado** da corretora é fixado em `valor_sats` (o que foi de fato abatido da dívida), não em "quanto BTC o BRL comprou" — se o preço do BTC variou nesse meio-tempo, o fundo absorve a diferença. Mesmo princípio desta seção, aplicado ao repagamento em vez do empréstimo.
 
 ---
 
 ## 10. Generalização multi-moeda
 
-O mecanismo da seção 9 é moeda-agnóstico por construção. Assimetria importante: **o lado do depósito nunca tem descasamento cambial** — depósito é sempre em BTC, de qualquer lugar. O problema de moeda só existe do lado do empréstimo.
-
-**Efeito de diversificação:** espalhar o livro por moedas locais não correlacionadas reduz o risco agregado do fundo — mesmo princípio de um banco não concentrar carteira num único setor. Ressalva: em estresse cambial global, moedas emergentes tendem a se mover juntas; o buffer precisa considerar esse cenário, não só o caso médio.
-
-**O que muda na arquitetura:**
-1. Generalizar o schema agora (campo `moeda_local`), construir os rails depois.
-2. Oráculo de câmbio por moeda (exchanges locais ou agregadores).
-3. **Um rail por país, não um rail universal** — Pix, M-Pesa, UPI são projetos de integração próprios, cada um.
-4. Lugares sem rail formal (ex. Afeganistão) precisam de um modelo de saída totalmente diferente — agente físico, rede informal (hawala), ou gasto direto em Lightning. Documentar como "camada de saída tier 3" separada.
+Sem alterações desde a última versão — schema `moeda_local` ainda não generalizado, permanece nota de roadmap.
 
 ---
 
 ## 11. Modelo de sustentabilidade — juros
 
-**Decidido:** juros flutuantes com base na Selic, com spread para baixo (a Selic brasileira é historicamente alta; mesmo abaixo dela o produto segue competitivo frente a crédito tradicional).
-
-**Pendente:** o número exato do spread. Não é só decisão de precificação — é o que financia o buffer de capital cambial da seção 9. Um spread baixo demais deixa o produto competitivo, mas não sobra reserva pra absorver a volatilidade do BTC. Os dois números (spread e tamanho do buffer) precisam ser decididos juntos. Fonte de dado: Selic tem série pública na API do Banco Central (SGS), dá pra puxar automático.
+Sem alterações — spread exato sobre a Selic segue pendente.
 
 ---
 
 ## 12. Exemplos de referência
 
-| Modelo | O que valida | Onde o Arakne diverge |
-|---|---|---|
-| **Grameen Bank** (Muhammad Yunus, Bangladesh) | Empréstimo em grupo com aval social como garantia — sem colateral físico, sem crédito tradicional | Arakne é global e pseudônimo, não presencial/local |
-| **Zidisha** | Microcrédito P2P direto, sem intermediário local, via plataforma digital | Arakne usa Bitcoin/Lightning como trilho, não conversão fiat direta |
-| **SACCO** (cooperativas de crédito e poupança, comuns na África Oriental) | Fundo compartilhado com governança coletiva financiando empréstimos mútuos entre membros — mesmo modelo da custódia compartilhada (seção 6) | SACCO normalmente exige registro formal (CNPJ-equivalente); a usuária do Arakne muitas vezes não pode se associar formalmente sem risco, então a estrutura precisa ser pseudônima e resistente a censura |
+Sem alterações — Grameen Bank, Zidisha, SACCO seguem como paralelos válidos.
 
 ---
 
 ## 13. Stack técnica e status de implementação
 
-| Camada | Escolha | Por quê |
+**Atualizado em 21/07 com o estado real, confirmado por leitura de código (não por suposição):**
+
+| Camada | Escolha | Status real confirmado |
 |---|---|---|
-| Backend | Python + FastAPI + SQLite | Zero fricção de infra em 2 semanas |
-| Frontend | React + Vite + TypeScript, mobile-first (PWA) | Roda em qualquer celular via navegador, sem loja de app |
-| Pagamentos | LNbits (self-hosted via Docker) sobre nó signet/testnet | API REST pronta pra wallet por usuária, invoice, checagem de pagamento |
-| Demo | Docker compose local | Não depende de wifi do evento; ter vídeo de backup |
+| Backend | Python + FastAPI + SQLite | ✅ Em uso |
+| Frontend | React + Vite + TypeScript | ✅ Em uso — confirmado app único em `frontend/` (o scaffold paralelo `src/`/"mkstack" mencionado em versão anterior deste doc foi descartado como não-relevante) |
+| Lightning (empréstimo, usuária) | LNbits | 🔴 Mock — nunca configurado com backend real |
+| Lightning (pool, repagamento→sats) | LNbits | 🟡 Decisão nova: `legend.lnbits.com` hospedado, não nó próprio (seção 21) |
+| Pix (repagamento) | Mercado Pago | ✅ **Real, testado, confirmado funcionando** (seção 18) |
+| Conversão BRL→sats | Binance | 🟡 Código pronto e testado em mock; compra (Spot) liberada; saque (Lightning) aguardando liberação de segurança pós-KYC da corretora (seção 20) |
+| Custódia multisig | Script offline (`embit`) | ✅ Script pronto e testado; **ainda não rodado com o time de verdade** |
+| Identidade Nostr / NIP-06 | A construir | 🟡 Muito mais avançado do que se pensava — ver seção 5.2 e 24 |
 
-**Já implementado:**
-- Sistema de conta: `saldo_sats` (disponível) separado de `saldo_devedor` (dívida), com endpoints de depósito/saque/extrato/saldo
-- Correção de vulnerabilidade IDOR em `/emprestimos` (não tinha autenticação nenhuma antes)
-- Parser de BR Code Pix (EMV/TLV, validação CRC16/CCITT-FALSE), cotação travada por 60s, cliente PSP com idempotência e tratamento de timeout vs. falha de pagamento
-- Gerador de keypair secp256k1 local (`arakne-crypto.ts`, nostr-tools), chave privada nunca sai do dispositivo — criptografada em repouso com AES-GCM via PIN (PBKDF2, 250k iterações)
-- Suite de testes: 41 passando
-- CORS configurado
-
-**Ainda não implementado (ver seção 14 e 15):** rails além do Pix, custódia multisig, Ponto Arakne (mecanismo completo da seção 5), disfarce financeiro no rail bancário (PJ), denominação em moeda local, tela de recuperação social.
+**Descoberto e corrigido em 20/07:** `saldo_sats` (mencionado em versões anteriores deste documento como "já implementado") **não existe** no schema do banco. Só existe `saldo_devedor`. Não há representação de saldo positivo/disponível — só dívida é rastreada.
 
 ---
 
 ## 14. MVP (hackathon) vs. Arquitetura-alvo
 
-| Mecanismo | MVP (hackathon, 14 dias) | Arquitetura-alvo |
+| Mecanismo | MVP (hackathon) | Arquitetura-alvo |
 |---|---|---|
-| Custódia do fundo | Nó LNbits único (custódia única, transitória) | Reserva fria multisig (2-de-3+) + liquidez quente Lightning |
-| Camada de gasto | Pix via QR (já ~80% pronto) | Modelo Tando completo: QR + chave Pix + multi-rail por país |
-| Disfarce no rail bancário | Pix pessoal da fundadora | PJ (ou nome fantasia validado) com nome comercial inofensivo, dedicada |
-| Canal de repagamento | Pix (chave fixa) + boleto pessoa física | Pix Cobrança dinâmico (atribuição por txid) + boleto (dinheiro, banco, lotérica) + agente/lotérica mediando Pix Cobrança |
-| Camada de investimento | Wireframes de toda a superfície; só a tela de depósito é funcional, ligada a uma carteira Lightning da própria equipe (prova técnica, não captação pública) | Superfície separada da camada de disfarce, PJ dedicada conectada, staking com ciclos mensais de recompensa, pendente de validação jurídica |
-| Proteção cambial | Documentada como política; implementação de denominação em moeda local é barata de fazer já | Denominação em moeda local + buffer dimensionado (30-50%) + banda de proteção opcional |
-| Moeda | Só BRL | Schema genérico (`moeda_local`) + oráculo por moeda + rail por país |
-| Juros | A definir (Selic − X%) | Mesma regra, com spread calibrado ao buffer necessário |
-| Ponto Arakne | Card único, gesto simples | Fluxo completo: 8 tentativas, recuperação social com relay de dois elos, aula disfarçada de novo ponto |
-| Recuperação social | Não implementada | Cadeia de vouch com escalonamento 24h/12h/6h..., até as fundadoras |
-| Sem rail formal (ex. Afeganistão) | Fora de escopo | Camada de saída tier 3 (agente físico / rede informal) |
-| Governança do fundo | Não implementada; wireframe/mock se sobrar tempo | Multisig com stewards reais, rotação de chaves documentada |
+| Custódia do fundo — Lightning | **`legend.lnbits.com` hospedado** (decisão 21/07) | Nó Lightning próprio, mainnet, com canais reais e liquidez própria |
+| Custódia do fundo — reserva fria | Script `gerar_multisig.py` rodado em modo demo (uma pessoa, 3 chaves) | Cada steward gera a própria chave isoladamente (`--gerar-1-steward` + `--combinar-xpubs`) |
+| Repagamento | Pix Cobrança dinâmico via Mercado Pago (real, testado) | Mesmo, + PJ com nome comercial dedicado |
+| Conversão BRL→sats | Binance, ordem a mercado (Spot) | Binance Convert (cotação travada) ou equivalente — avaliado e adiado, ver seção 20 |
+| Carteira da usuária | Ainda mock (LNbits) | Breez SDK (não-custodial, ver seção 22) |
+| Voucher com custo | Especificado (seção 23), não implementado | Mesmo, com valor calibrado (hoje: 500 sats fixo) |
 
 ---
 
 ## 15. Pendências consolidadas
 
-- **Tela de gerar o QR code de recuperação social** — ainda não desenhada (prioridade alta, é o ponto de entrada do fluxo de recuperação).
-- **Fluxo de "enviar por chave Pix" sem QR** — falta construir (seção 7).
-- **Geração de Pix Cobrança dinâmico por transação** — hoje a stack só lê QR de terceiros; emitir cobrança própria com `txid` é capacidade nova (seção 8).
-- **Spread de juros abaixo da Selic** — número exato pendente, precisa ser decidido junto com o dimensionamento do buffer cambial (seções 9 e 11).
-- **PJ com nome comercial inofensivo** — depende de investimento; até lá, MVP usa Pix pessoal (seção 8). Boleto pode não depender disso se a plataforma de emissão permitir nome fantasia numa conta pessoa física — ainda não validado (seção 8).
-- **Cache do scanner de QR** — garantir que o frame da câmera (pagamento e recuperação) não fica salvo na galeria do sistema operacional.
-- **Validação jurídica (escopo ampliado)** — cobre dois níveis, a serem discutidos com jurídico se houver investimento: (a) "aceite explícito de risco de perda" do lado da mutuária, evitando regulação de valor mobiliário; (b) a camada de investimento (seção 16) inteira — trocar "cota" por "posição de staking" não muda a substância jurídica por trás, e a jurisdição da entidade não resolve sozinha a jurisdição de quem está sendo captado, dado que a intenção é permitir "qualquer mulher/pessoa" participar.
-- **Multisig real** (stewards, rotação de chaves) — arquitetura-alvo documentada, não implementada; aceitável adiar para pós-hackathon.
-- **Configuração de vencimento do boleto** — aceite de pagamento em atraso ou fluxo de reemissão (seção 8).
-
-**Resolvido nesta rodada:** modelo de ameaça de segurança completo (device, coação, backup, linguagem, proteção do Ponto Arakne, rede de apoio) — já fechado pelo time.
+- 🔴 `ao_atrasar()` nunca é chamada — atraso não trava ninguém automaticamente hoje.
+- 🔴 Parser de QR Pix de terceiros (fluxo de gasto, seção 7) não existe.
+- 🔴 Cotação/trava de câmbio (seção 9) não existe — dois valores independentes informados manualmente.
+- 🟡 Saque Binance aguardando liberação de segurança (24-48h pós-verificação KYC, sem como acelerar).
+- 🔴 LNbits do empréstimo (usuária) continua 100% mock.
+- 🔴 Multisig real do time não foi gerada ainda (só testada em modo demo).
+- 🟡 Frontend conectado ao rail de Pix — colega iniciou ("início da implementação front financeiro", commit `b2e9b87`), não auditado ainda.
+- 🔴 Mecânica de voucher com trava (seção 23) — especificação fechada, zero código.
+- 🟡 Recuperação social/Nostr (seção 5.2) — muito mais avançada do que o documento presumia; precisa de leitura/auditoria antes de continuar construindo em cima.
 
 ---
 
 ## 16. Roadmap — Camada de investimento (staking do pool)
 
-> **Status: visão de arquitetura-alvo, não escopo funcional do hackathon** (exceto uma tela, ver 16.4). Pendente de validação jurídica antes de qualquer implementação real além do wireframe.
-
-### 16.1 O que é
-
-Um jeito de captar capital de investidoras que querem pool de crédito remunerado, apostando no fundo compartilhado (seção 6) performar bem — o que também cria mais incentivo pro fundo crescer. É uma camada de **público diferente** das mutuárias: quem investe aqui provavelmente não é a mesma pessoa sob controle coercitivo que o disfarce inteiro do produto existe pra proteger.
-
-### 16.2 Vocabulário: de FIDC para blockchain
-
-O mecanismo é o mesmo de um fundo de recebíveis tradicional (FIDC) — capital de terceiros financiando uma carteira de crédito, com retorno proporcional à performance — mas a linguagem certa pra esse produto é a nativa de DeFi, não a de mercado de capitais tradicional:
-
-| Termo FIDC | Equivalente blockchain | O que representa no Arakne |
-|---|---|---|
-| Fundo / patrimônio líquido | Pool de crédito | O mesmo fundo compartilhado da seção 6 |
-| Cota | Posição de stake / *pool share* | Proporção que a investidora tem do pool (mesma lógica de aTokens/cTokens da Aave/Compound) |
-| Valor da cota / NAV | Exchange rate da posição | Patrimônio total ÷ posições emitidas — termo já nativo em DeFi |
-| Cotista | Staker / *liquidity supplier* | Investidora que trava capital no pool |
-| Administrador fiduciário / custodiante | Stewards do multisig (seção 6) | Papel já coberto pela arquitetura de custódia existente |
-| Dividendo mensal | Recompensa por ciclo (*epoch*) | Ver mecânica abaixo |
-
-### 16.3 Mecânica: distribuição discreta por ciclo (decisão fechada)
-
-Entre os dois modelos que existem em DeFi, a escolha foi **distribuição discreta por ciclo mensal** (estilo Curve/GMX), não acumulação contínua (estilo Aave/Compound):
-- A cada mês, o lucro líquido do pool (juros recebidos das mutuárias, menos perdas por default, menos custo operacional) é calculado e dividido pelas posições em circulação.
-- A recompensa vira um "claim" reivindicável separadamente — a posição principal não cresce de valor sozinha, ao contrário do modelo de acumulação contínua.
-- Ela só saca a recompensa, nunca o principal — o que trava capital como base estável de empréstimo e **é**, ao mesmo tempo, o colchão cambial da seção 9. Importante deixar transparente pra investidora: principal travado não é o mesmo que principal garantido — o valor da posição pode cair se o fundo tiver perda líquida.
-
-**Arquitetura:** como o Arakne roda em Bitcoin/Lightning, não numa chain com contrato inteligente, isso não vira um token de verdade — vira mais uma tabela no mesmo banco que já guarda `saldo_sats`/`saldo_devedor`, só que pro lado investidor (`posicao_staking`, com principal travado e recompensas reivindicáveis). Precisa de um job/processo que fecha o cálculo do ciclo mensal — não é automático, alguém ou algo precisa rodá-lo.
-
-### 16.4 Superfície e escopo para o hackathon
-
-- **Interface separada** da camada de disfarce (seções 2 a 5) — público diferente, sem a mesma necessidade de esconder nada. Pode ser um dashboard aberto, com a estética da marca, sem disfarce têxtil.
-- **PJ separada, porém conectada** à entidade operacional (a que lida com mutuárias) — segrega responsabilidade regulatória: se uma das duas tiver problema jurídico, a outra não cai automaticamente junto.
-- **Escopo do hackathon:** wireframes de toda a camada de investimento. A única parte funcional real é a **tela de depósito**, conectada de fato ao fundo — mas usando uma **carteira Lightning da própria equipe**, não captação pública de terceiros. É demonstração de viabilidade técnica ponta a ponta, não uma oferta real de investimento — essa distinção importa para o enquadramento jurídico e não deve se perder de vista se o escopo dessa tela mudar depois.
-
-### 16.5 Pendência jurídica (ver seção 15 para o item consolidado)
-
-"Cotas com dividendo mensal por performance de fundo administrado por terceiros" é próximo da definição de valor mobiliário no Brasil (Lei 6.385/76) — o desenho mais parecido é um FIDC, que exige registro na CVM, administrador fiduciário licenciado e custodiante. Trocar "cota" por "posição de staking" muda a linguagem, não necessariamente a substância jurídica — reguladores tendem a olhar se existe expectativa de lucro a partir do esforço de terceiros administrando capital, não o nome do mecanismo (ex.: a SEC americana tratou programas de staking-as-a-service com recompensa prometida como valor mobiliário não registrado em pelo menos um caso de peso, Kraken, 2023). Jurisdição da entidade pode reduzir esse risco, mas não o elimina sozinha — regulação de valor mobiliário costuma olhar de onde vêm as investidoras, não só onde a empresa está registrada, e a intenção aqui é permitir "qualquer mulher/pessoa" participar, o que é oferta aberta, não fechada a uma jurisdição específica. Fica como pendência a discutir com jurídico se houver investimento — não bloqueia o hackathon dado o escopo da seção 16.4.
+Sem alterações desde a última versão — segue como visão de arquitetura-alvo, pendente de validação jurídica, fora do escopo funcional do hackathon (exceto a tela de depósito).
 
 ---
 
 ## 17. Documentos relacionados
 
-- `arakne-adendo-arquitetura-pix-custodia.md` — versão detalhada, passo a passo, das seções 6 a 11 deste documento (histórico da discussão, mantido para referência).
-- Documento de wireframes/telas (catálogo de padrões, camada financeira, estados de erro) — passado ao time de design.
-- `arquitetura-arakne-hackathon.md` — plano de sprint original de 14 dias.
-- `arakne-prompts-ia.md` — prompt 0 (contexto fixo) + 10 prompts sequenciais para execução com Claude Code.
-- Documento HTML do mito da Aracne — peça narrativa conectando o mito ao mecanismo, usada no pitch.
+- `arakne-adendo-arquitetura-pix-custodia.md`
+- Documento de wireframes/telas
+- `arquitetura-arakne-hackathon.md`
+- `arakne-prompts-ia.md`
+- Documento HTML do mito da Aracne
+
+---
+
+## 18. Rail de Pix real (Mercado Pago) — construído 19-20/07
+
+**Construído do zero** (branch `jhualves` → mergeada em `DiOliver`): não existia nenhuma linha de Pix no repositório antes desta rodada — só Lightning mockado.
+
+**Peças:**
+- `services/pix.py` — cliente Mercado Pago, com fallback mock (mesmo padrão do `lnbits.py`). Detecta credencial de teste (`TEST-...`) e injeta `payer.first_name: "APRO"` automaticamente (mas ver ressalva abaixo — não funciona nesta API).
+- `models/pagamento_pix.py` — tabela `pagamentos_pix`, `txid` único por transação.
+- `routers/pix.py` — `POST /pix/emprestimos/{id}/cobranca` (gera QR), `GET /pix/pagamentos/{txid}` (polling), `POST /pix/webhook` (confirmação automática, idempotente, reusa `ao_quitar()`).
+
+**Bugs reais encontrados e corrigidos, em ordem:**
+1. **`401 Unauthorized`** — token colado era a Public Key (formato UUID curto), não o Access Token de verdade (formato longo `TEST-xxxxx-xxxxxx-xxxx-xxxxx`). Resolvido confirmando visualmente o tamanho/formato do token.
+2. **`400 Bad Request`, "payer.email must be a valid email"** — o e-mail sintético usava domínio `.invalid` (RFC 2606, tecnicamente reservado pra esse fim), mas o validador do Mercado Pago rejeita esse TLD mesmo assim. Corrigido trocando por `example.com` (também reservado por RFC 2606, mas com TLD `.com` que passa na validação).
+3. **Confirmado, testando de verdade:** uma cobrança Pix real, criada com sucesso, com QR code, `mp_payment_id` numérico real, `ticket_url` real do sandbox Mercado Pago.
+
+**Limitação descoberta e não contornável — sandbox do Mercado Pago não fecha o loop de teste:** confirmado por exemplo oficial do próprio Mercado Pago (`pix-payment-sample-java`): pagamentos Pix em ambiente de teste, na API `/v1/payments` (Checkout Transparente, a que usamos), **ficam pendentes pra sempre** — não existe simulação de pagamento real via banco nessa API. O valor mágico `payer.first_name: "APRO"` que resolve isso **existe só na API mais nova (`/v1/orders`)**, não na que usamos. Decisão tomada: manter a API atual (testada, sem outros problemas conhecidos) e aceitar que o teste de "pagamento → webhook → confirmação" não fecha 100% em sandbox — funciona normalmente em produção (limitação é só do ambiente de teste).
+
+**Webhook testado com túnel público** (`cloudflared tunnel --url http://localhost:8000`) — confirmado que o Mercado Pago realmente envia a notificação (viu-se no log do servidor, `POST /?data.id=...`), mas bateu na URL raiz por engano na primeira tentativa (faltou `/pix/webhook` no final da `MP_WEBHOOK_URL`) — corrigido.
+
+---
+
+## 19. Custódia multisig — script de geração offline
+
+`scripts/gerar_multisig.py` — gera a reserva fria 2-de-3 (seção 6) inteiramente offline, via biblioteca `embit`, sem precisar de nó Bitcoin rodando.
+
+**Dois modos:**
+- `--gerar-3-demo` — uma pessoa gera as 3 chaves de uma vez. **Só serve pra demonstrar viabilidade técnica no pitch — nunca usar com fundos reais**, porque anula o ponto inteiro da custódia compartilhada (uma pessoa sozinha teria o quorum).
+- `--gerar-1-steward` + `--combinar-xpubs` — cada steward gera a própria chave isolada, compartilha só o xpub (nunca a mnemonic); o script combina os xpubs recebidos num descriptor `wsh(sortedmulti(2,...))`. Modo correto pra produção.
+
+Testado nos dois modos, incluindo a proteção que recusa combinar um arquivo que contenha mnemonic por engano.
+
+**Pendência:** ainda não rodado com o time de verdade (só em modo demo, nos testes).
+
+---
+
+## 20. Conversão BRL→sats (Binance) — o "passo 4" do ciclo financeiro
+
+### 20.1 O buraco que isso fecha
+
+Confirmado em 20/07: quando o webhook do Pix confirmava um repagamento, o código só abatia `saldo_devedor` no banco — **nenhum sat de verdade voltava pro pool Lightning**. O fundo ficaria permanentemente mais pobre a cada empréstimo, sem esse passo.
+
+### 20.2 Processo de decisão de qual corretora usar
+
+Avaliadas três opções, nessa ordem, cada uma descartada ou confirmada por evidência real (nunca por suposição):
+
+1. **Foxbit** — API REST v3 bem documentada. **Descartada**: confirmado via endpoint público (`GET /rest/v3/currencies`, sem autenticação) que a única rede disponível pra BTC é `"bitcoin"` (on-chain) — Lightning não existe na API, mesmo aparecendo como recurso do app deles.
+2. **BityBank / Biscoint** — era a pioneira histórica em Lightning no Brasil. **Descartada por incerteza**: a API do Biscoint foi desativada; quem provê API agora é uma empresa diferente (BitPreço), sem confirmação de que ainda suporta Lightning.
+3. **Binance** — **Escolhida.** Confirmado oficialmente (`developers.binance.com`, doc de "Deposit Address"): rede `"LIGHTNING"` documentada na API de verdade, não só na interface. Situação regulatória no Brasil resolvida em 2026 (autorizada a operar como corretora de valores, acordo com a CVM fechado em 2024).
+
+### 20.3 O que foi construído
+
+- `services/exchange.py` — `BinanceService`: `cotacao_btc_brl()` (pública), `comprar_btc_mercado()` (ordem a mercado, `quoteOrderQty` em BRL), `sacar_lightning()` (`network: "LIGHTNING"`).
+- **Diferença deliberada de design vs. `lnbits.py`/`pix.py`:** erro real em runtime **nunca** cai em mock silencioso aqui — levanta `BinanceError` explicitamente. Envolve dinheiro real (compra + saque); mascarar uma falha como sucesso criaria inconsistência contábil real.
+- `models/conversao_pool.py` — tabela de auditoria (`conversoes_pool`), separada da confirmação do repagamento: uma falha na conversão **nunca** reverte ou atrasa a quitação da dívida da usuária, só fica registrada como `"falhou"` pra reconciliar depois.
+- Integrado no webhook do Pix (`routers/pix.py`) — depois que a dívida já foi commitada, tenta converter; qualquer exceção é capturada e registrada, nunca propaga.
+
+### 20.4 Gotchas operacionais descobertos (importantes pro time saber)
+
+- **Chave de API com permissão de saque exige restrição de IP** — obrigatório pela própria Binance, confirmado na doc oficial.
+- **Toda verificação de segurança nova (incluindo o KYC inicial) trava saques por 24-48h**, sem exceção, sem como acelerar. A conta foi verificada ~20h de 20/07; saque só libera entre a noite de 21/07 e a noite de 22/07.
+- **A Secret Key só aparece uma vez** na tela de criação — se não copiar na hora, precisa apagar a chave e gerar outra (aconteceu uma vez nesta rodada).
+- **Convert API (`getQuote`/`acceptQuote`) avaliada e descartada por ora**: conceitualmente melhor pro nosso caso (cotação travada, como o Pix já usa), e confirmado via endpoint público que o par BRL→BTC existe (`fromAssetMinAmount: 0.051`, praticamente zero). Mas múltiplos desenvolvedores relatam erro `-1002 "not authorized"` nesses endpoints especificamente, mesmo com chave válida e IP liberado — sugere uma liberação extra não documentada claramente. Risco não vale a pena tão perto do prazo; registrado como melhoria de roadmap pós-hackathon, não abandonado de vez.
+
+---
+
+## 21. Carteira Lightning do pool — de nó próprio pra LNbits hospedado
+
+**Decisão tomada em 21/07, revisando a seção 6.**
+
+O `docker-compose.yml` já tinha Bitcoin Core + LND + LNbits configurados — mas em **regtest** (`config/bitcoin/bitcoin.conf`: `regtest=1`). Regtest é uma rede de teste isolada, **sem nenhuma conexão com a rede Lightning real**.
+
+Isso só foi descoberto como bloqueador ao planejar como o pool receberia o saque real da Binance (seção 20): um nó regtest não tem como receber um pagamento Lightning de fora, porque ele simplesmente não está conectado à rede real. Não era questão de configuração — é incompatibilidade de rede fundamental.
+
+**Decisão:** usar `legend.lnbits.com` — instância pública, hospedada, gratuita, rodando em **mainnet real**, sem KYC — em vez de subir o Docker próprio. O código (`services/lnbits.py`) não muda nada, porque fala a API REST do LNbits, que é a mesma não importa quem hospeda. Só troca `LNBITS_URL` no `.env`.
+
+**Registrado com honestidade:** isso é infraestrutura de terceiro, não "nossa" — não é a arquitetura-alvo (que continua sendo nó próprio com canais reais, seção 6/14). É uma escolha de MVP explícita, documentada, do mesmo jeito que outras peças do hackathon (Pix pessoal em vez de PJ, etc.).
+
+---
+
+## 22. Carteiras individuais das usuárias — decisão Breez SDK
+
+**Decidido em 20-21/07, ainda não implementado.**
+
+Distinto da seção 21 (que é sobre o *pool*): esta seção é sobre a carteira Lightning de **cada usuária individual** — hoje ainda 100% mock (LNbits, com a chave admin da wallet dela guardada no próprio backend, ou seja, tecnicamente custodial, apesar da visão do produto ser "ela assina, sem dupla-custódia").
+
+**Escolhido: Breez SDK** (geração atual, "Breez SDK - Spark", non-custodial de verdade, protocolo Spark). Três motivos, que se somam:
+1. Existe um bônus específico no prêmio do hackathon pra quem usa Breez.
+2. A integração Lightning com usuárias individuais **nunca foi construída** — não é trocar algo que já funciona, é escolher a ferramenta certa antes de começar.
+3. O SDK documenta explicitamente suporte a **"run multiple user balances from a single backend server"** — desenhado pra exatamente esse caso: um backend gerenciando várias carteiras não-custodiais.
+
+**Onde não se aplica:** o pool continua precisando ser custodial (seção 6) — o mecanismo de aval/tier exige que a Arakne tenha poder de congelar/gerenciar saldo, o que um SDK não-custodial não permite por design. Breez é só pra carteira individual, nunca pro fundo.
+
+**Prazo:** parte do escopo de quarta (junto do NIP-06/identidade, seção 5.2) — não afeta o prazo do rail financeiro.
+
+---
+
+## 23. Mecânica de voucher com trava em sats — especificação fechada
+
+**Fechada em 20/07, zero código ainda.**
+
+Hoje, `routers/avais.py` só cria o vínculo `avalista_id` — sem escrow, sem trava de saldo. `GET /usuarias/me/convite` já existe e já é gated por `pode_avalizar()` (tier ≥ 3), mas sem custo em sats nenhum.
+
+**Especificação nova, substituindo/complementando o gate:**
+
+1. **Gate pra gerar link de indicação:** `tier ≥ 2` **E** já ter pago a trava — os dois juntos (produção-alvo será tier ≥ 3, igual já estava; tier 2 é só pra demo não ficar longa).
+2. Avalista em tier ≥ 2 paga **500 sats fixos** (calibra depois) via Lightning, **da própria carteira, assinando ela mesma** — sem dupla-custódia, coerente com a decisão da seção 22.
+3. Só depois desse pagamento confirmado, o link/código é gerado e liberado.
+4. Avalizada usa o link, nasce em tier 1, pega o empréstimo — **nada acontece com a trava ainda**.
+5. Avalizada **paga o primeiro empréstimo** (quita) → **só nesse momento** o fundo devolve os 500 sats pra avalista via Lightning.
+
+**Por que o passo 5 é "paga", não "pega o empréstimo":** foi uma correção feita em cima de uma primeira formulação mais rápida — devolver a trava assim que a avalizada *pega* o crédito zeraria o risco da avalista quase na hora, contradizendo o racional original da seção 3 ("quem avaliza passa a ter risco real"). A avalista só fica livre do risco quando a avalizada prova que paga.
+
+---
+
+## 24. Descompassos doc↔código descobertos nesta rodada
+
+Terceira e quarta ocorrência do mesmo padrão já visto com o Pix (`mapa-codigo-arakne.md`) — documentação/memória descrevendo algo como pronto que não estava, ou vice-versa:
+
+1. **`saldo_sats`** — documentado como já implementado (versões anteriores deste doc, seção 13); confirmado ausente do schema real.
+2. **`ao_atrasar()`** — existe e está correta, mas nunca é chamada; atraso não tem efeito automático hoje.
+3. **Existência de dois frontends** (`frontend/` real vs. `src/`/"mkstack", um scaffold Nostr genérico desconectado do backend) — descoberto em 19/07, já descartado como não-relevante, mas não estava documentado em lugar nenhum antes disso.
+4. **Recuperação social/Nostr** (seção 5.2) — o oposto dos casos acima: estava documentado como "não implementada" e na real já tem bastante código real construído por Julia. Vale ler antes de presumir qualquer coisa.
+
+**Lição registrada, de novo:** antes de construir em cima de qualquer peça do sistema, ler o código real primeiro — não confiar só no que a documentação ou a memória do time dizem que existe.
+
+---
+
+## 25. Registro de sessões (19-21/07/2026) e prazos
+
+### 25.1 Prazos
+
+| Workstream | Prazo original | Status em 21/07 |
+|---|---|---|
+| Rail financeiro (Pix, Lightning, custódia, conversão BRL↔sats) | Terça 12h | Prazo estourado ("terça 17:10" segundo a fundadora, com bom humor) — trabalho contínuo, sem bloqueio grave |
+| Nostr / NIP-06 | Quarta à noite | Mais avançado do que o esperado — Julia já construiu boa parte (seção 5.2) |
+
+### 25.2 O que foi resolvido nesta rodada (sexta a segunda)
+
+- Rail de Pix real, ponta a ponta testado (seção 18)
+- Script de custódia multisig (seção 19)
+- Integração Binance completa em código, testada em mock (seção 20)
+- Decisão de arquitetura: LNbits hospedado pro pool (seção 21)
+- Decisão de arquitetura: Breez SDK pras carteiras individuais (seção 22)
+- Especificação fechada da mecânica de voucher com trava (seção 23)
+- `.env` carregando automaticamente via `python-dotenv` (antes exigia `export` manual)
+- Múltiplos merges de branch resolvidos sem conflito (`jhualves` ↔ `DiOliver`)
+
+### 25.3 Pendente pro próximo passo
+
+- Saque Binance liberar (aguardando janela de segurança, fora do nosso controle)
+- Configurar `legend.lnbits.com` de verdade (criar wallets, colar chaves no `.env`)
+- Rodar `gerar_multisig.py` com o time de verdade (não só modo demo)
+- Implementar a mecânica de voucher com trava (seção 23) — zero código ainda
+- Ler/auditar o código de recuperação social/Nostr já construído (seção 5.2) antes de continuar essa frente quarta
+- Conectar frontend ao rail de Pix (colega já começou, não auditado)
+
+---
+
+## Documentos relacionados
+
+- `arakne-adendo-arquitetura-pix-custodia.md`
+- Documento de wireframes/telas
+- `arquitetura-arakne-hackathon.md`
+- `arakne-prompts-ia.md`
+- Documento HTML do mito da Aracne
