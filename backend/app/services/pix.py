@@ -78,6 +78,43 @@ class MercadoPagoPixService:
             "external_reference": None,
         }
 
+    @staticmethod
+    def _mock_payout(chave_pix: str, valor_centavos_brl: int) -> dict:
+        return {
+            "id": "mock-payout-" + secrets.token_hex(8),
+            "status": "approved",
+            "chave_pix": chave_pix,
+            "valor_centavos_brl": valor_centavos_brl,
+        }
+
+    @staticmethod
+    def _detectar_tipo_chave_pix(chave: str) -> str:
+        """Detecta o tipo de chave Pix a partir do formato.
+
+        Heurística simples (não exaustiva — cobre os 4 tipos do Banco Central):
+          - CPF: 11 dígitos numéricos
+          - CNPJ: 14 dígitos numéricos
+          - telefone: +5511999999999 ou 5511999999999 (12-13 dígitos)
+          - email: contém @
+          - aleatória: caso contrário (UUID-like de 32 chars)
+
+        Retorna um dos tipos aceitos pelo Mercado Pago: "CPF", "CNPJ",
+        "phone", "email" ou "random".
+        """
+        chave = chave.strip()
+        if "@" in chave:
+            return "email"
+        digitos = "".join(c for c in chave if c.isdigit())
+        if chave.startswith("+") and len(digitos) in (12, 13):
+            return "phone"
+        if len(digitos) == 11 and not chave.startswith("+"):
+            return "CPF"
+        if len(digitos) == 14:
+            return "CNPJ"
+        if len(digitos) in (12, 13) and chave.startswith("55"):
+            return "phone"
+        return "random"
+
     # ── API methods ──────────────────────────────────────────────
 
     def criar_cobranca(self, valor_brl: float, txid: str, descricao: str) -> dict:
@@ -147,6 +184,54 @@ class MercadoPagoPixService:
                 }
         except Exception as e:
             logger.warning("Mercado Pago consultar_pagamento falhou: %s", e)
+            raise MercadoPagoPixError(str(e)) from e
+
+    def pagar_pix(self, chave_pix: str, valor_centavos_brl: int, descricao: str) -> dict:
+        """Envia um Pix (Payout) para uma chave Pix qualquer — o rail do
+        off-ramp carteira → comerciante.
+
+        Diferente de `criar_cobranca` (que gera um QR pra alguém pagar), aqui
+        o dinheiro sai da conta Mercado Pago da fundadora e cai na conta do
+        dono da `chave_pix`. Por isso o método é sensível: uma falha real em
+        runtime NUNCA cai em mock — levanta MercadoPagoPixError. Fingir que
+        "o Pix foi enviado" quando não foi criaria um rombo contábil real
+        (usuária viu saldo abatido, comerciante não recebeu).
+
+        Retorna {id, status, chave_pix, valor_centavos_brl}. `status` segue
+        os valores nativos do Mercado Pago ("approved" = enviado e creditado).
+        """
+        if self._mock:
+            return self._mock_payout(chave_pix, valor_centavos_brl)
+        key_type = self._detectar_tipo_chave_pix(chave_pix)
+        try:
+            with httpx.Client(timeout=15) as client:
+                resp = client.post(
+                    f"{self.base_url}/v1/payments",
+                    headers=self._headers(),
+                    json={
+                        "transaction_amount": valor_centavos_brl / 100,
+                        "description": descricao,
+                        "payment_method_id": "pix",
+                        "pix": {
+                            "key": chave_pix,
+                            "key_type": key_type,
+                        },
+                        # Mercado Pago exige um payer com e-mail; a fundadora
+                        # é a pagadora aqui (conta do token), usamos um
+                        # e-mail sintético por payout.
+                        "payer": {"email": "contato@arakne.local"},
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return {
+                    "id": str(data["id"]),
+                    "status": data.get("status", "pending"),
+                    "chave_pix": chave_pix,
+                    "valor_centavos_brl": valor_centavos_brl,
+                }
+        except Exception as e:
+            logger.error("Mercado Pago pagar_pix falhou: %s", e)
             raise MercadoPagoPixError(str(e)) from e
 
     @staticmethod

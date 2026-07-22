@@ -52,6 +52,11 @@ class LNbitsService:
         }
 
     @staticmethod
+    def _mock_balance() -> dict:
+        # Saldo fixo de demo — 50.000 sats. Determinístico pra testes.
+        return {"balance_msats": 50_000 * 1000}
+
+    @staticmethod
     def _mock_invoice(amount: int, memo: str) -> dict:
         return {
             "payment_hash": "mock_" + secrets.token_hex(16),
@@ -133,6 +138,29 @@ class LNbitsService:
         except Exception as e:
             logger.warning("LNbits check_payment failed: %s", e)
             return True
+
+    def get_wallet_balance(self, wallet_key: str) -> dict:
+        """Consulta o saldo de uma wallet em millisatoshis.
+
+        Retorna {balance_msats}. Em mock mode, devolve um saldo de demo
+        fixo (50.000 sats) pra a UI da carteira ter o que mostrar.
+        """
+        if self._mock or not wallet_key:
+            return self._mock_balance()
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.get(
+                    f"{self.base_url}/api/v1/wallet",
+                    headers={"X-API-KEY": wallet_key},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                # LNbits devolve saldo em millisatoshis.
+                return {"balance_msats": int(data.get("balance", 0))}
+        except Exception as e:
+            logger.warning("LNbits get_wallet_balance failed — switching to mock: %s", e)
+            self._mock = True
+            return self._mock_balance()
 
 
 # Module-level singleton

@@ -1269,6 +1269,59 @@ h1, h2, h3,
   color: var(--color-muted);
 }
 
+/* ── Carteira Arakne ─────────────────────────────────────────
+   Card de saldo da carteira interna (sats + BRL). Disfarce:
+   "Carteira" + "Saldo" + "Cotação do fio". sats em texto pequeno. */
+.carteira-card__saldo {
+  margin-bottom: 0.75rem;
+}
+
+.carteira-card__linha {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.carteira-card__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.carteira-card__valor {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.carteira-card__sats {
+  font-size: 0.72rem;
+  color: var(--color-muted);
+  margin-top: 0.125rem;
+  text-align: right;
+}
+
+.carteira-card__cotacao {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  margin-bottom: 0.75rem;
+  font-style: italic;
+}
+
+.carteira-card__botoes {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.carteira-card__botoes .financial__btn {
+  flex: 1;
+  min-width: 90px;
+}
+
 /* ── Reserva do ateliê central (custódia multisig) ───────────
    Disfarce: card informativo na Bancada de Trabalho que mostra
    dados públicos da reserva coletiva (endereço, quorum, rede).

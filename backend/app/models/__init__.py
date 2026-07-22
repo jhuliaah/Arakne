@@ -17,6 +17,7 @@ from app.models.recovery_share_backup import RecoveryShareBackup  # noqa: F401
 from app.models.pagamento_pix import PagamentoPix  # noqa: F401
 from app.models.custodia import CustodiaMultisig  # noqa: F401
 from app.models.conversao_pool import ConversaoPool  # noqa: F401
+from app.models.transacao_carteira import TransacaoCarteira  # noqa: F401
 
 __all__ = [
     "Base",
@@ -36,4 +37,5 @@ __all__ = [
     "PagamentoPix",
     "CustodiaMultisig",
     "ConversaoPool",
+    "TransacaoCarteira",
 ]

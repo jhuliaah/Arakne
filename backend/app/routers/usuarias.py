@@ -181,6 +181,7 @@ def create_usuaria(
         codigo_indicacao_usado=payload.codigo_indicacao,
         npub=payload.npub,
         apelido=payload.apelido,
+        pais=payload.pais,
     )
     db.add(usuaria)
     db.flush()  # get the id without committing yet

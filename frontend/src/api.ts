@@ -1,6 +1,6 @@
 /** API client — all fetch calls to the Arakne backend go through here. */
 
-import type { CobrancaPix, ConcluirAulaResponse, CustodiaReservaFria, Emprestimo, IniciarAulaResponse, InscreverTrilhaResponse, LoginResponse, PagamentoResponse, PontoDeTroca, StatusPagamentoPix, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
+import type { CobrancaPix, ConcluirAulaResponse, CotacaoCarteira, CustodiaReservaFria, DepositarCarteiraResponse, Emprestimo, GerarQuitacaoResponse, IniciarAulaResponse, InscreverTrilhaResponse, LoginResponse, PagarCarteiraResponse, PagamentoResponse, PontoDeTroca, SaldoCarteira, StatusPagamentoPix, TransacaoCarteira, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
 import { getStoredNpub } from "./lib/pattern-storage";
 
 const API_BASE = "/api";
@@ -211,6 +211,27 @@ export async function updateApelido(token: string, apelido: string): Promise<Usu
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ apelido }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Atualiza o país da usuária logada via PATCH /usuarias/me/pais.
+ *  `pais` é ISO alpha-2 (ex: "BR"). Usado pela carteira para liberar
+ *  pagamentos Pix (só "BR" por enquanto). Retorna a usuária atualizada,
+ *  ou null em falha (ex.: endpoint ainda não existe no backend). */
+export async function updatePais(token: string, pais: string): Promise<Usuaria | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/usuarias/me/pais`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ pais }),
     });
     if (!resp.ok) return null;
     return await resp.json();
@@ -801,6 +822,135 @@ export async function getStatusPagamentoPix(txid: string): Promise<StatusPagamen
 export async function getCustodiaReservaFria(): Promise<CustodiaReservaFria | null> {
   try {
     const resp = await fetch(`${API_BASE}/custodia/reserva-fria`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+// ── Carteira Arakne ────────────────────────────────────────
+// Carteira interna de sats com conversão BRL. Os endpoints /carteira/*
+// exigem Bearer (ensureToken). Na UI aparece como "Carteira" — o
+// vocabulário sats/BTC fica em texto pequeno, nunca em destaque.
+
+/** Cotação BTC↔BRL (GET /carteira/cotacao). Público, sem Bearer. */
+export async function getCotacaoCarteira(): Promise<CotacaoCarteira | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/carteira/cotacao`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Saldo da carteira da usuária logada (GET /carteira/saldo). */
+export async function getSaldoCarteira(): Promise<SaldoCarteira | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/carteira/saldo`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Histórico de transações da carteira (GET /carteira/transacoes). */
+export async function getTransacoesCarteira(): Promise<TransacaoCarteira[] | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/carteira/transacoes`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Gera QR Pix para a usuária depositar BRL que vira sats na carteira
+ *  interna (POST /carteira/depositar). */
+export async function depositarCarteira(
+  valorCentavosBrl: number
+): Promise<DepositarCarteiraResponse | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/carteira/depositar`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ valor_centavos_brl: valorCentavosBrl }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Envia Pix para a chave do comerciante, debitando sats da carteira
+ *  interna (POST /carteira/pagar). Lança Error em 403 (país não
+ *  suportado) para o frontend tratar com mensagem específica. */
+export async function pagarCarteira(
+  chavePix: string,
+  valorCentavosBrl: number,
+  descricao?: string
+): Promise<PagarCarteiraResponse> {
+  const token = await ensureToken();
+  if (!token) {
+    throw new Error("Não foi possível confirmar agora. Tente de novo.");
+  }
+  const res = await fetch(`${API_BASE}/carteira/pagar`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      chave_pix: chavePix,
+      valor_centavos_brl: valorCentavosBrl,
+      descricao: descricao ?? null,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Erro ${res.status} ao pagar`);
+  }
+  return res.json();
+}
+
+/** Gera QR Pix para abater (quitar) parte de um empréstimo em BRL
+ *  (POST /carteira/gerar-quitacao). O backend converte sats→BRL e
+ *  gera a cobrança Pix; quando o pagamento é confirmado, o saldo
+ *  devedor do empréstimo é reduzido. */
+export async function gerarQuitacaoCarteira(
+  emprestimoId: number,
+  valorSats: number
+): Promise<GerarQuitacaoResponse | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/carteira/gerar-quitacao`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        emprestimo_id: emprestimoId,
+        valor_sats: valorSats,
+      }),
+    });
     if (!resp.ok) return null;
     return await resp.json();
   } catch {

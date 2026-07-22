@@ -102,6 +102,18 @@ class BinanceService:
         }
 
     @staticmethod
+    def _mock_venda(valor_btc: float) -> dict:
+        preco = BinanceService._mock_cotacao()["price"]
+        valor_brl = round(valor_btc * preco, 2)
+        return {
+            "order_id": "mock_" + secrets.token_hex(8),
+            "status": "FILLED",
+            "executed_qty_btc": valor_btc,
+            "valor_brl": valor_brl,
+            "preco_medio": preco,
+        }
+
+    @staticmethod
     def _mock_saque() -> dict:
         return {"withdraw_id": "mock_" + secrets.token_hex(8), "status": "mock_enviado"}
 
@@ -208,6 +220,54 @@ class BinanceService:
                 return {"withdraw_id": str(data.get("id", "")), "status": "enviado"}
         except Exception as e:
             logger.error("Binance sacar_lightning falhou: %s", e)
+            raise BinanceError(str(e)) from e
+
+    def vender_btc_mercado(self, valor_btc: float) -> dict:
+        """Vende BTC a mercado recebendo BRL — simétrico ao `comprar_btc_mercado`,
+        mas side=SELL. Usado no off-ramp (sats → BRL → Pix pro comerciante).
+
+        Diferente da compra (que usa `quoteOrderQty` em BRL), aqui usamos
+        `quantity` em BTC — a usuária quer converter uma quantidade exata de
+        sats que ela já tem na carteira, não "quero receber X BRL".
+
+        Retorna {order_id, status, executed_qty_btc, valor_brl, preco_medio}.
+
+        Levanta BinanceError se a chamada falhar — nunca cai em mock aqui
+        (mesmo racional do `comprar_btc_mercado`: falha real não pode virar
+        "sucesso" fake, criaria inconsistência contábil real — achar que o
+        BRL foi creditado pro Pix quando não foi).
+        """
+        if self._mock:
+            return self._mock_venda(valor_btc)
+        try:
+            with httpx.Client(timeout=15) as client:
+                params = self._signed_params(
+                    {
+                        "symbol": "BTCBRL",
+                        "side": "SELL",
+                        "type": "MARKET",
+                        "quantity": f"{valor_btc:.8f}",
+                    }
+                )
+                resp = client.post(
+                    f"{self.base_url}/api/v3/order",
+                    headers=self._headers(),
+                    params=params,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                qtd_btc = float(data.get("executedQty", 0))
+                valor_brl = float(data.get("cummulativeQuoteQty", 0))
+                preco_medio = (valor_brl / qtd_btc) if qtd_btc else 0.0
+                return {
+                    "order_id": str(data["orderId"]),
+                    "status": data.get("status", "FILLED"),
+                    "executed_qty_btc": qtd_btc,
+                    "valor_brl": valor_brl,
+                    "preco_medio": preco_medio,
+                }
+        except Exception as e:
+            logger.error("Binance vender_btc_mercado falhou: %s", e)
             raise BinanceError(str(e)) from e
 
 

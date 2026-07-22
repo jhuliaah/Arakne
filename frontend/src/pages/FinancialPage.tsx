@@ -27,12 +27,14 @@ import {
   getStatusPagamentoPix,
   satsParaCentavosBrl,
   SATS_TO_BRL,
+  getSaldoCarteira,
 } from "../api";
 import type { ConviteResponse } from "../api";
 import type { AvalistaRecuperacao } from "../api";
-import type { CobrancaPix, Emprestimo, PontoDeTroca, Troca, Usuaria } from "../types";
+import type { CobrancaPix, Emprestimo, PontoDeTroca, SaldoCarteira, Troca, Usuaria } from "../types";
 import { useDelayedFlag } from "../lib/useDelayedFlag";
 import MeuCodigoQR from "../components/MeuCodigoQR";
+import type { CarteiraModo } from "./CarteiraTransacaoPage";
 
 interface FinancialPageProps {
   onBack: () => void;
@@ -40,6 +42,8 @@ interface FinancialPageProps {
   onAbrirScanner: () => void;
   prefilledPontoIdentificador?: string | null;
   onPrefillConsumed?: () => void;
+  /** Abre a tela de transação da carteira (pagar/receber/quitar). */
+  onAbrirCarteira: (modo: CarteiraModo) => void;
 }
 
 const TIER_LABELS: Record<number, string> = {
@@ -159,6 +163,7 @@ export default function FinancialPage({
   onAbrirScanner,
   prefilledPontoIdentificador,
   onPrefillConsumed,
+  onAbrirCarteira,
 }: FinancialPageProps) {
   const [usuaria, setUsuaria] = useState<Usuaria | null>(null);
   const [emprestimos, setEmprestimos] = useState<Emprestimo[]>([]);
@@ -245,6 +250,11 @@ export default function FinancialPage({
   // Confirmação de "Puxar novelos" (substitui a exibição da invoice)
   const [liberadoDisplay, setLiberadoDisplay] = useState<Emprestimo | null>(null);
 
+  // ── Carteira Arakne ────────────────────────────────────────
+  // Saldo da carteira interna (sats + BRL). Buscado no mount e
+  // refrescado quando a usuária volta da tela de transação.
+  const [saldoCarteira, setSaldoCarteira] = useState<SaldoCarteira | null>(null);
+
   // Tier upgrade animation
   const [tierUpgraded, setTierUpgraded] = useState<number | null>(null);
 
@@ -319,6 +329,11 @@ export default function FinancialPage({
     const tecelasData = await getAvalistasRecuperacao(activeToken);
     setTecelas(tecelasData ?? []);
     setTecelasLoading(false);
+
+    // Load saldo da carteira (best-effort — o endpoint pode não
+    // existir ainda se a Lane A ainda não terminou).
+    const saldo = await getSaldoCarteira();
+    if (saldo) setSaldoCarteira(saldo);
 
     setLoading(false);
   }, []);
@@ -784,6 +799,58 @@ export default function FinancialPage({
             {actionLoading ? "Puxando..." : "Puxar novelos"}
           </button>
         )}
+
+        {/* ── Carteira Arakne ───────────────────────────────────
+            Card de saldo da carteira interna (sats + BRL). Disfarce:
+            "Carteira" + "Saldo" + "Cotação do fio". Os botões falam
+            em "Pagar", "Receber" e "Devolver novelos" (vocabulário
+            já existente). sats aparece em texto pequeno, como detalhe. */}
+        <div className="financial__invite carteira-card">
+          <h3 className="financial__history-title">Carteira</h3>
+          <div className="carteira-card__saldo">
+            <div className="carteira-card__linha">
+              <span className="carteira-card__label">Saldo</span>
+              <span className="carteira-card__valor">
+                {saldoCarteira
+                  ? brlFormatter.format(saldoCarteira.saldo_brl)
+                  : brlFormatter.format(0)}
+              </span>
+            </div>
+            <p className="carteira-card__sats">
+              {saldoCarteira
+                ? saldoCarteira.saldo_sats.toLocaleString("pt-BR")
+                : 0}{" "}
+              sats
+            </p>
+          </div>
+          {saldoCarteira && saldoCarteira.cotacao_btc_brl > 0 && (
+            <p className="carteira-card__cotacao">
+              Cotação do fio: 1 BTC = {brlFormatter.format(saldoCarteira.cotacao_btc_brl)}
+            </p>
+          )}
+          <div className="carteira-card__botoes">
+            <button
+              className="financial__btn financial__btn--small"
+              onClick={() => onAbrirCarteira("pagar")}
+            >
+              Pagar
+            </button>
+            <button
+              className="financial__btn financial__btn--small"
+              onClick={() => onAbrirCarteira("receber")}
+            >
+              Receber
+            </button>
+            {(usuaria?.saldo_devedor ?? 0) > 0 && (
+              <button
+                className="financial__btn financial__btn--small financial__btn--secondary"
+                onClick={() => onAbrirCarteira("quitar")}
+              >
+                Devolver novelos
+              </button>
+            )}
+          </div>
+        </div>
 
         {/* History */}
         <div className="financial__history">

@@ -61,6 +61,7 @@ import PatternLoginPage from "./pages/onboarding/PatternLoginPage";
 import RecoverAccountPage from "./pages/onboarding/RecoverAccountPage";
 import RecoveryHelpRequestPage from "./pages/onboarding/RecoveryHelpRequestPage";
 import DemoSetupPage from "./pages/DemoSetupPage";
+import CarteiraTransacaoPage, { type CarteiraModo } from "./pages/CarteiraTransacaoPage";
 import RecoveryScanner from "./components/RecoveryScanner";
 import RecoveryBell from "./components/RecoveryBell";
 import RecoveryQRGenerator from "./components/RecoveryQRGenerator";
@@ -111,6 +112,7 @@ type View =
   | "financial"
   | "extrato"
   | "scannerQR"
+  | "carteiraTransacao"
   | "decoy";
 
 const NAV_TO_VIEW: Record<NavTarget, View> = {
@@ -125,6 +127,7 @@ const BACK_TO_CATALOG_VIEWS: View[] = [
   "financial",
   "extrato",
   "scannerQR",
+  "carteiraTransacao",
   "decoy",
   "comunidade",
   "projetos",
@@ -176,6 +179,9 @@ export default function App() {
   // Set when ScannerQRPage successfully reads a code — consumed once by
   // FinancialPage to pre-fill the troca form, then cleared.
   const [scannedIdentificador, setScannedIdentificador] = useState<string | null>(null);
+  // Modo da tela de transação da carteira (pagar/receber/quitar).
+  // Definido pelo FinancialPage antes de navegar para carteiraTransacao.
+  const [carteiraModo, setCarteiraModo] = useState<CarteiraModo>("receber");
   // Trilha/aula navigation state for the learning trails.
   const [selectedTrilhaId, setSelectedTrilhaId] = useState<number | null>(null);
   const [selectedAula, setSelectedAula] = useState<Aula | null>(null);
@@ -532,6 +538,23 @@ export default function App() {
         onAbrirScanner={() => setView("scannerQR")}
         prefilledPontoIdentificador={scannedIdentificador}
         onPrefillConsumed={() => setScannedIdentificador(null)}
+        onAbrirCarteira={(modo) => {
+          setCarteiraModo(modo);
+          setView("carteiraTransacao");
+        }}
+      />
+    );
+  }
+
+  if (view === "carteiraTransacao") {
+    return (
+      <CarteiraTransacaoPage
+        modo={carteiraModo}
+        onBack={() => setView("financial")}
+        onTransacaoConcluida={() => {
+          // Apenas volta ao financial — o FinancialPage refresca o
+          // saldo/tier no seu próprio loadData quando re-monta.
+        }}
       />
     );
   }
