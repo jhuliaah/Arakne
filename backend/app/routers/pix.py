@@ -13,11 +13,12 @@ frontend.
 
 import logging
 import secrets
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.auth import _naive_utc
 from app.database import get_db
 from app.models.conversao_pool import ConversaoPool
 from app.models.emprestimo import Emprestimo
@@ -122,7 +123,7 @@ def _confirmar_pagamento(pagamento: PagamentoPix, db: Session) -> None:
         return  # idempotente — webhook pode reenviar a mesma notificação
 
     pagamento.status = "aprovado"
-    pagamento.confirmado_em = datetime.utcnow()
+    pagamento.confirmado_em = _naive_utc(datetime.now(UTC))
 
     emprestimo = pagamento.emprestimo
     usuaria = emprestimo.usuaria
@@ -131,7 +132,7 @@ def _confirmar_pagamento(pagamento: PagamentoPix, db: Session) -> None:
     if usuaria.saldo_devedor == 0 and emprestimo.status != "quitado":
         ao_quitar(usuaria)
         emprestimo.status = "quitado"
-        emprestimo.quitado_em = datetime.utcnow()
+        emprestimo.quitado_em = _naive_utc(datetime.now(UTC))
 
     db.commit()
 
@@ -180,7 +181,7 @@ def _depositar_no_pool(pagamento: PagamentoPix, db: Session) -> None:
         )
         conversao.binance_withdraw_id = saque["withdraw_id"]
         conversao.status = "concluida"
-        conversao.concluido_em = datetime.utcnow()
+        conversao.concluido_em = _naive_utc(datetime.now(UTC))
     except BinanceError as e:
         logger.error(
             "Conversão BRL→sats falhou pro pagamento %s (dívida da usuária já "

@@ -102,6 +102,18 @@ class BinanceService:
         }
 
     @staticmethod
+    def _mock_venda(valor_btc: float) -> dict:
+        preco = BinanceService._mock_cotacao()["price"]
+        valor_brl = round(valor_btc * preco, 2)
+        return {
+            "order_id": "mock_" + secrets.token_hex(8),
+            "status": "FILLED",
+            "executed_qty_btc": valor_btc,
+            "valor_brl": valor_brl,
+            "preco_medio": preco,
+        }
+
+    @staticmethod
     def _mock_saque() -> dict:
         return {"withdraw_id": "mock_" + secrets.token_hex(8), "status": "mock_enviado"}
 
@@ -208,6 +220,132 @@ class BinanceService:
                 return {"withdraw_id": str(data.get("id", "")), "status": "enviado"}
         except Exception as e:
             logger.error("Binance sacar_lightning falhou: %s", e)
+            raise BinanceError(str(e)) from e
+
+    def gerar_invoice_deposito(self, valor_sats: int) -> dict:
+        """Gera uma invoice Lightning pra DEPOSITAR sats na conta Binance —
+        a ponta de entrada da ponte "quente → fria" (seção 21 do doc mestre):
+        o pool (LNbits, custodial hospedado) paga essa invoice, os sats
+        chegam na Binance, e de lá saem on-chain pra multisig (sacar_onchain
+        abaixo). Não existe jeito de mandar sats do LNbits direto pra um
+        endereço on-chain — LNbits fala Lightning, não Bitcoin base layer;
+        a Binance é o único ponto de conversão de protocolo que já temos
+        integrado.
+
+        Mesmo endpoint de depósito documentado oficialmente
+        (developers.binance.com/docs/wallet/capital/deposite-address),
+        com `network=LIGHTNING` — o campo `address` da resposta É a invoice
+        bolt11 pra esse caso (a Binance reusa o mesmo campo pros dois tipos
+        de rede, on-chain e Lightning).
+
+        Retorna {invoice}. Levanta BinanceError se falhar — nunca mock aqui,
+        mesmo racional dos outros métodos que envolvem fluxo de dinheiro real.
+        """
+        if self._mock:
+            return {"invoice": "lnbc" + str(valor_sats) + "mockdeposito1..."}
+        try:
+            with httpx.Client(timeout=15) as client:
+                params = self._signed_params(
+                    {
+                        "coin": "BTC",
+                        "network": "LIGHTNING",
+                        "amount": f"{valor_sats / 100_000_000:.8f}",
+                    }
+                )
+                resp = client.get(
+                    f"{self.base_url}/sapi/v1/capital/deposit/address",
+                    headers=self._headers(),
+                    params=params,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return {"invoice": data["address"]}
+        except Exception as e:
+            logger.error("Binance gerar_invoice_deposito falhou: %s", e)
+            raise BinanceError(str(e)) from e
+
+    def sacar_onchain(self, endereco_btc: str, valor_btc: float) -> dict:
+        """Saca BTC via rede on-chain (Bitcoin base layer) — a ponta de
+        saída da ponte "quente → fria": depois que os sats chegaram na
+        Binance via Lightning (gerar_invoice_deposito), saca pra um
+        endereço on-chain — no nosso caso, o endereço da reserva fria
+        multisig (MULTISIG_ENDERECO).
+
+        Mesmo endpoint de sacar_lightning, mas com `network="BTC"`
+        (a rede on-chain padrão do Bitcoin).
+
+        Retorna {withdraw_id, status}. Levanta BinanceError se falhar.
+        """
+        if self._mock:
+            return self._mock_saque()
+        try:
+            with httpx.Client(timeout=15) as client:
+                params = self._signed_params(
+                    {
+                        "coin": "BTC",
+                        "network": "BTC",
+                        "address": endereco_btc,
+                        "amount": f"{valor_btc:.8f}",
+                    }
+                )
+                resp = client.post(
+                    f"{self.base_url}/sapi/v1/capital/withdraw/apply",
+                    headers=self._headers(),
+                    params=params,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return {"withdraw_id": str(data.get("id", "")), "status": "enviado"}
+        except Exception as e:
+            logger.error("Binance sacar_onchain falhou: %s", e)
+            raise BinanceError(str(e)) from e
+
+    def vender_btc_mercado(self, valor_btc: float) -> dict:
+        """Vende BTC a mercado recebendo BRL — simétrico ao `comprar_btc_mercado`,
+        mas side=SELL. Usado no off-ramp (sats → BRL → Pix pro comerciante).
+
+        Diferente da compra (que usa `quoteOrderQty` em BRL), aqui usamos
+        `quantity` em BTC — a usuária quer converter uma quantidade exata de
+        sats que ela já tem na carteira, não "quero receber X BRL".
+
+        Retorna {order_id, status, executed_qty_btc, valor_brl, preco_medio}.
+
+        Levanta BinanceError se a chamada falhar — nunca cai em mock aqui
+        (mesmo racional do `comprar_btc_mercado`: falha real não pode virar
+        "sucesso" fake, criaria inconsistência contábil real — achar que o
+        BRL foi creditado pro Pix quando não foi).
+        """
+        if self._mock:
+            return self._mock_venda(valor_btc)
+        try:
+            with httpx.Client(timeout=15) as client:
+                params = self._signed_params(
+                    {
+                        "symbol": "BTCBRL",
+                        "side": "SELL",
+                        "type": "MARKET",
+                        "quantity": f"{valor_btc:.8f}",
+                    }
+                )
+                resp = client.post(
+                    f"{self.base_url}/api/v3/order",
+                    headers=self._headers(),
+                    params=params,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                qtd_btc = float(data.get("executedQty", 0))
+                valor_brl = float(data.get("cummulativeQuoteQty", 0))
+                preco_medio = (valor_brl / qtd_btc) if qtd_btc else 0.0
+                return {
+                    "order_id": str(data["orderId"]),
+                    "status": data.get("status", "FILLED"),
+                    "executed_qty_btc": qtd_btc,
+                    "valor_brl": valor_brl,
+                    "preco_medio": preco_medio,
+                }
+        except Exception as e:
+            logger.error("Binance vender_btc_mercado falhou: %s", e)
             raise BinanceError(str(e)) from e
 
 

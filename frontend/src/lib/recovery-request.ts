@@ -69,6 +69,7 @@ import {
   login,
   setToken,
   setIdentificador,
+  setPin,
   fetchRecoveryShare,
 } from "../api";
 
@@ -85,6 +86,10 @@ export interface RecoveryRequestResult {
   /** Share 1 decriptada do backend (ou null se fetch/decrypt falhou).
    *  Combinar com a share 0 da convidadora (ou backup de papel). */
   backendShare: Uint8Array | null;
+  /** True se o login falhou (PIN incorreto). P2 (auditoria item 9):
+   *  permite a UI mostrar "PIN incorreto" imediatamente em vez de
+   *  esperar 60s de timeout quando há convidadora (published > 0). */
+  loginFailed: boolean;
 }
 
 /** Uma share recebida da convidadora em resposta ao pedido de recuperação. */
@@ -145,16 +150,30 @@ export async function startRecoveryRequest(
   // 4. Autentica no backend com (identificador, pin) e busca a share 1.
   // A dona está num dispositivo novo — precisa fazer login para obter
   // token antes de GET /usuarias/me/recovery-share.
+  //
+  // Defesa em profundidade (BUG 3): chamamos setPin(pin) além de
+  // setIdentificador + setToken. Assim, se o token direto abaixo falhar
+  // por qualquer motivo (race, latência, backend reiniciado), o
+  // ensureToken() consegue re-logar com o PIN — sem setPin, getPin()
+  // retornaria null e a recuperação quebraria mesmo com PIN correto.
   let backendShare: Uint8Array | null = null;
+  let loginFailed = false;
   try {
     setIdentificador(identificador);
+    setPin(pin);
     const loginResp = await login(identificador, pin);
     if (loginResp) {
       setToken(loginResp.token);
-      const blob = await fetchRecoveryShare();
+      // Passa o token direto para evitar o round-trip getMe do
+      // ensureToken — mais robusto contra race condition/latência.
+      const blob = await fetchRecoveryShare(loginResp.token);
       if (blob) {
         backendShare = await decryptWithPin(blob, pin);
       }
+    } else {
+      // P2 (auditoria item 9): login falhou (PIN incorreto). Marca para
+      // a UI poder mostrar feedback imediato em vez de esperar timeout.
+      loginFailed = true;
     }
   } catch (err) {
     console.error(
@@ -223,6 +242,7 @@ export async function startRecoveryRequest(
     published,
     failed,
     backendShare,
+    loginFailed,
   };
 }
 
@@ -356,6 +376,7 @@ export async function startRecoveryRequestWithNsec(
     failed,
     backendShare: null,
     ownerNpub,
+    loginFailed: false,
   };
 }
 

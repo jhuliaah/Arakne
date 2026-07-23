@@ -1,9 +1,18 @@
 /** API client — all fetch calls to the Arakne backend go through here. */
 
-import type { ConcluirAulaResponse, Emprestimo, IniciarAulaResponse, InscreverTrilhaResponse, LoginResponse, PagamentoResponse, PontoDeTroca, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
+import type { CobrancaPix, ConcluirAulaResponse, CotacaoCarteira, CustodiaReservaFria, DepositarCarteiraResponse, Emprestimo, GerarQuitacaoResponse, IniciarAulaResponse, InscreverTrilhaResponse, LoginResponse, PagarCarteiraResponse, PagamentoResponse, PontoDeTroca, SaldoCarteira, StatusPagamentoPix, TransacaoCarteira, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
 import { getStoredNpub } from "./lib/pattern-storage";
 
 const API_BASE = "/api";
+
+// Conversão demo sats → BRL (1 sat = R$0,0001; 10000 sats = R$1,00).
+// Em produção, buscar cotação via API externa.
+export const SATS_TO_BRL = 0.0001;
+
+// Helper: converte sats para centavos de BRL (o backend espera centavos).
+export function satsParaCentavosBrl(sats: number): number {
+  return Math.round(sats * SATS_TO_BRL * 100);
+}
 
 // ── Storage helpers ──────────────────────────────────────────
 
@@ -12,6 +21,7 @@ const STORAGE_KEYS = {
   pin: "arakne_pin",
   token: "arakne_token",
   emprestimos: "arakne_emprestimo_ids",
+  pixTxids: "arakne_pix_txids",
   avalCodigos: "arakne_aval_codigos",
   onboardingDone: "arakne_onboarding_done",
   nickname: "arakne_nickname",
@@ -79,6 +89,25 @@ export function addEmprestimoId(id: number): void {
   if (!ids.includes(id)) {
     ids.push(id);
     localStorage.setItem(STORAGE_KEYS.emprestimos, JSON.stringify(ids));
+  }
+}
+
+// ── Pix txids (rastreamento de repagamentos via Pix) ────────
+// Mesmo padrão de arakne_emprestimo_ids: o backend não tem endpoint
+// "listar pagamentos Pix por usuária", só GET /pix/pagamentos/{txid}.
+// Rastreamos cada txid criado via criarCobrancaPix no localStorage e
+// hidratamos a timeline do ExtratoPage com polling individual.
+
+export function getPixTxids(): string[] {
+  const raw = localStorage.getItem(STORAGE_KEYS.pixTxids);
+  return raw ? JSON.parse(raw) as string[] : [];
+}
+
+export function addPixTxid(txid: string): void {
+  const txids = getPixTxids();
+  if (!txids.includes(txid)) {
+    txids.push(txid);
+    localStorage.setItem(STORAGE_KEYS.pixTxids, JSON.stringify(txids));
   }
 }
 
@@ -202,6 +231,27 @@ export async function updateApelido(token: string, apelido: string): Promise<Usu
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ apelido }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Atualiza o país da usuária logada via PATCH /usuarias/me/pais.
+ *  `pais` é ISO alpha-2 (ex: "BR"). Usado pela carteira para liberar
+ *  pagamentos Pix (só "BR" por enquanto). Retorna a usuária atualizada,
+ *  ou null em falha (ex.: endpoint ainda não existe no backend). */
+export async function updatePais(token: string, pais: string): Promise<Usuaria | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/usuarias/me/pais`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ pais }),
     });
     if (!resp.ok) return null;
     return await resp.json();
@@ -460,13 +510,20 @@ export async function uploadRecoveryShare(shareBlob: string): Promise<boolean> {
 
 /** Busca a share 1 (criptografada com PIN) do backend.
  *  Endpoint: GET /usuarias/me/recovery-share (auth required).
- *  Retorna o blob base64, ou null se não houver share armazenada (404) ou falhar. */
-export async function fetchRecoveryShare(): Promise<string | null> {
+ *  Retorna o blob base64, ou null se não houver share armazenada (404) ou falhar.
+ *
+ *  `token` opcional: se o caller já fez login e tem o token em mãos
+ *  (ex.: fluxo de recuperação em novo dispositivo), passe direto para
+ *  evitar o round-trip `getMe` do `ensureToken` — esse round-trip pode
+ *  falhar por race condition/latência e quebrar a recuperação mesmo com
+ *  PIN correto (BUG 3). Se omitido, cai em `ensureToken` (comportamento
+ *  histórico — usado por callers que já têm sessão estabelecida). */
+export async function fetchRecoveryShare(token?: string): Promise<string | null> {
   try {
-    const token = await ensureToken();
-    if (!token) return null;
+    const t = token ?? (await ensureToken());
+    if (!t) return null;
     const resp = await fetch(`${API_BASE}/usuarias/me/recovery-share`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${t}` },
     });
     if (resp.status === 404) return null;
     if (!resp.ok) return null;
@@ -728,6 +785,209 @@ export async function iniciarAula(
     const resp = await fetch(`${API_BASE}/trilhas/aulas/${aulaId}/iniciar`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+// ── Pix (Mercado Pago) e custódia multisig ──────────────────
+// Repagamento via dinheiro bancário (fora do app) e reserva fria.
+// Os endpoints Pix/custódia são públicos (não exigem Bearer), mas
+// passamos o token se houver — não custa, e o backend pode mudar.
+
+/** Gera cobrança Pix para repagar (parte de) um empréstimo.
+ *  Na UI aparece como "concluir o padrão" — nunca como fatura.
+ *  Endpoint: POST /pix/emprestimos/{id}/cobranca.
+ *  Após criar com sucesso, rastreia o txid no localStorage para
+ *  alimentar a timeline do ExtratoPage (polling individual). */
+export async function criarCobrancaPix(
+  emprestimoId: number,
+  valorSats: number,
+  valorCentavosBrl: number
+): Promise<CobrancaPix | null> {
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const token = localStorage.getItem("arakne_token");
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch(`${API_BASE}/pix/emprestimos/${emprestimoId}/cobranca`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ valor_sats: valorSats, valor_centavos_brl: valorCentavosBrl }),
+    });
+    if (!resp.ok) return null;
+    const cobranca = await resp.json();
+    // Rastreia o txid para a timeline do ExtratoPage.
+    if (cobranca?.txid) addPixTxid(cobranca.txid);
+    return cobranca;
+  } catch {
+    return null;
+  }
+}
+
+/** Consulta status de uma cobrança Pix pelo txid (read-only no DB;
+ *  não consulta o Mercado Pago). Útil como fallback de polling se o
+ *  webhook não estiver configurado.
+ *  Endpoint: GET /pix/pagamentos/{txid}. */
+export async function getStatusPagamentoPix(txid: string): Promise<StatusPagamentoPix | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/pix/pagamentos/${txid}`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Busca o status de todos os txids Pix rastreados no localStorage
+ *  (criados via criarCobrancaPix). Faz as chamadas em paralelo com
+ *  Promise.all e ignora nulls (txid expirado/inválido/erro de rede).
+ *  Usado pelo ExtratoPage para incluir repagamentos via Pix na timeline. */
+export async function getTodosStatusPix(): Promise<StatusPagamentoPix[]> {
+  const txids = getPixTxids();
+  if (txids.length === 0) return [];
+  const resultados = await Promise.all(
+    txids.map((txid) => getStatusPagamentoPix(txid))
+  );
+  return resultados.filter((s): s is StatusPagamentoPix => s !== null);
+}
+
+/** Dados públicos da custódia multisig ativa (reserva fria).
+ *  Nunca inclui chave privada — só descriptor/endereço para auditoria.
+ *  Endpoint: GET /custodia/reserva-fria. */
+export async function getCustodiaReservaFria(): Promise<CustodiaReservaFria | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/custodia/reserva-fria`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+// ── Cesta de novelos (carteira) ────────────────────────────
+// Carteira interna de sats com conversão BRL. Os endpoints /carteira/*
+// exigem Bearer (ensureToken). Na UI aparece como "Cesta de novelos" — o
+// vocabulário sats/BTC fica em texto pequeno, nunca em destaque.
+
+/** Cotação BTC↔BRL (GET /carteira/cotacao). Público, sem Bearer. */
+export async function getCotacaoCarteira(): Promise<CotacaoCarteira | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/carteira/cotacao`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Saldo da carteira da usuária logada (GET /carteira/saldo). */
+export async function getSaldoCarteira(): Promise<SaldoCarteira | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/carteira/saldo`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Histórico de transações da carteira (GET /carteira/transacoes). */
+export async function getTransacoesCarteira(): Promise<TransacaoCarteira[] | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/carteira/transacoes`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Gera QR Pix para a usuária depositar BRL que vira sats na carteira
+ *  interna (POST /carteira/depositar). */
+export async function depositarCarteira(
+  valorCentavosBrl: number
+): Promise<DepositarCarteiraResponse | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/carteira/depositar`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ valor_centavos_brl: valorCentavosBrl }),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Envia Pix para a chave do comerciante, debitando sats da carteira
+ *  interna (POST /carteira/pagar). Lança Error em 403 (país não
+ *  suportado) para o frontend tratar com mensagem específica. */
+export async function pagarCarteira(
+  chavePix: string,
+  valorCentavosBrl: number,
+  descricao?: string
+): Promise<PagarCarteiraResponse> {
+  const token = await ensureToken();
+  if (!token) {
+    throw new Error("Não foi possível confirmar agora. Tente de novo.");
+  }
+  const res = await fetch(`${API_BASE}/carteira/pagar`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      chave_pix: chavePix,
+      valor_centavos_brl: valorCentavosBrl,
+      descricao: descricao ?? null,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Erro ${res.status} ao pagar`);
+  }
+  return res.json();
+}
+
+/** Gera QR Pix para abater (quitar) parte de um empréstimo em BRL
+ *  (POST /carteira/gerar-quitacao). O backend converte sats→BRL e
+ *  gera a cobrança Pix; quando o pagamento é confirmado, o saldo
+ *  devedor do empréstimo é reduzido. */
+export async function gerarQuitacaoCarteira(
+  emprestimoId: number,
+  valorSats: number
+): Promise<GerarQuitacaoResponse | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(`${API_BASE}/carteira/gerar-quitacao`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        emprestimo_id: emprestimoId,
+        valor_sats: valorSats,
+      }),
     });
     if (!resp.ok) return null;
     return await resp.json();

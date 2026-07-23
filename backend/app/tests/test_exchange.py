@@ -61,3 +61,26 @@ def test_sacar_lightning_real_levanta_binance_error_em_falha():
     servico = BinanceService("fake_key", "fake_secret", "https://api.binance.invalid")
     with pytest.raises(BinanceError):
         servico.sacar_lightning("lnbc1000fake", 0.00001)
+
+
+def test_gerar_invoice_deposito_mock_retorna_invoice():
+    assert exchange.is_mock
+    resultado = exchange.gerar_invoice_deposito(50_000)
+    assert resultado["invoice"].startswith("lnbc")
+
+
+def test_sacar_onchain_mock_retorna_status_enviado():
+    resultado = exchange.sacar_onchain("bc1qmockaddress", 0.0005)
+    assert resultado["status"] == "mock_enviado"
+
+
+def test_gerar_invoice_deposito_real_levanta_binance_error_em_falha():
+    servico = BinanceService("fake_key", "fake_secret", "https://api.binance.invalid")
+    with pytest.raises(BinanceError):
+        servico.gerar_invoice_deposito(50_000)
+
+
+def test_sacar_onchain_real_levanta_binance_error_em_falha():
+    servico = BinanceService("fake_key", "fake_secret", "https://api.binance.invalid")
+    with pytest.raises(BinanceError):
+        servico.sacar_onchain("bc1qmockaddress", 0.0005)

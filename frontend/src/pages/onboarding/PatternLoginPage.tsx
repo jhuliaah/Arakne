@@ -28,11 +28,16 @@ interface PatternLoginPageProps {
   onCreateAccount: () => void;
   /** "Esqueci meu Ponto Arakne" → vai para RecoverAccountPage. */
   onForgotPattern: () => void;
+  /** Volta para a tela anterior (splash ou convite). Opcional: se não
+   *  vier, o botão "Voltar" não aparece (a tela tem saídas alternativas
+   *  via "Esqueci" e "Criar conta"). Evita dead-end quando a usuária
+   *  chegou aqui por engano e quer voltar sem desenhar. */
+  onBack?: () => void;
 }
 
 const MAX_ATTEMPTS = 8;
 
-export default function PatternLoginPage({ onUnlocked, onCreateAccount, onForgotPattern }: PatternLoginPageProps) {
+export default function PatternLoginPage({ onUnlocked, onCreateAccount, onForgotPattern, onBack }: PatternLoginPageProps) {
   const [error, setError] = useState(false);
   const [attempts, setAttempts] = useState(0);
   const [resetKey, setResetKey] = useState(0);
@@ -62,6 +67,15 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount, onForgot
             <button className="btn btn--secondary" onClick={onForgotPattern}>
               Recuperar conta
             </button>
+            {onBack && (
+              <button
+                className="btn btn--secondary"
+                onClick={onBack}
+                style={{ marginTop: "0.5rem" }}
+              >
+                ← Voltar
+              </button>
+            )}
           </div>
         </main>
       </div>
@@ -120,6 +134,15 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount, onForgot
             <button className="btn btn--secondary" onClick={onForgotPattern}>
               Solicitar aula de reforço
             </button>
+            {onBack && (
+              <button
+                className="btn btn--secondary"
+                onClick={onBack}
+                style={{ marginTop: "0.5rem" }}
+              >
+                ← Voltar
+              </button>
+            )}
           </div>
         </main>
       </div>
@@ -143,12 +166,13 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount, onForgot
           />
 
           {loading && (
-            <p className="field__hint" style={{ textAlign: "center", marginTop: "0.75rem" }}>
-              Verificando...
-            </p>
+            <div className="recover__status" style={{ paddingTop: "0.75rem" }}>
+              <span className="spinner" style={{ width: "24px", height: "24px" }} />
+              <p className="recover__status-text">Verificando seu ponto...</p>
+            </div>
           )}
 
-          {attempts > 0 && (
+          {attempts > 0 && !loading && (
             <p className="field__hint" style={{ textAlign: "center", marginTop: "0.5rem" }}>
               Tentativa {attempts} de {MAX_ATTEMPTS}
             </p>
@@ -159,6 +183,14 @@ export default function PatternLoginPage({ onUnlocked, onCreateAccount, onForgot
               Esqueci meu Ponto Arakne
             </button>
           </div>
+
+          {onBack && (
+            <div className="onboarding__footer-link" style={{ marginTop: "0.75rem" }}>
+              <button type="button" onClick={onBack}>
+                ← Voltar
+              </button>
+            </div>
+          )}
         </div>
       </main>
     </div>

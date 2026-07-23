@@ -22,10 +22,12 @@ from app.models import (  # noqa: F401 — import so tables are registered
     PagamentoPix,
     CustodiaMultisig,
     ConversaoPool,
+    TransacaoCarteira,
 )
 from app.routers import (
     avais,
     auth,
+    carteira,
     custodia,
     emprestimos,
     health,
@@ -85,6 +87,7 @@ app.include_router(emprestimos.router)
 app.include_router(pontos_troca.router)
 app.include_router(trilhas.router)
 app.include_router(pix.router)
+app.include_router(carteira.router)
 app.include_router(custodia.router)
 
 

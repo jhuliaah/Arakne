@@ -78,14 +78,22 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
       const apelido = nome.trim() || undefined;
       const usuaria = await criarConta(pin, inviteCodigo, undefined, apelido);
       if (!usuaria) {
-        setError("Não foi possível criar sua conta agora. Tente novamente.");
+        // criarConta retorna null em erro de rede ou resposta inválida
+        // do backend. Distinguimos de um erro inesperado (catch) para
+        // dar mensagem amigável de conectividade.
+        setError(
+          "Não foi possível conectar ao ateliê central. Verifique sua internet e tente de novo."
+        );
         setLoading(false);
         return;
       }
 
       if (apelido) setNickname(apelido);
       onCreated(identity.npub, identity.nsec, pin);
-    } catch {
+    } catch (err) {
+      console.error("[CreateAccountPage] falha ao criar conta:", err);
+      // Erro inesperado (ex.: falha ao criptografar o nsec localmente).
+      // Mensagem genérica em vocabulário crochê, sem expor detalhes técnicos.
       setError("Algo deu errado ao guardar seu desenho. Tente novamente.");
       setLoading(false);
     }
@@ -208,9 +216,10 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
           )}
 
           {loading && (
-            <p className="field__hint" style={{ textAlign: "center", marginTop: "0.75rem" }}>
-              Guardando seu desenho...
-            </p>
+            <div className="recover__status" style={{ paddingTop: "0.75rem" }}>
+              <span className="spinner" style={{ width: "24px", height: "24px" }} />
+              <p className="recover__status-text">Guardando seu desenho...</p>
+            </div>
           )}
         </div>
       </main>

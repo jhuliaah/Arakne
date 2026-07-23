@@ -25,6 +25,7 @@ class Usuaria(Base):
     avalista_id = Column(Integer, ForeignKey("usuarias.id"), nullable=True)
     npub = Column(String, unique=True, index=True, nullable=True)
     apelido = Column(String, nullable=True)  # apelido público (max ~80 chars)
+    pais = Column(String(2), nullable=True)  # ISO 3166-1 alpha-2 (ex: "BR"). Null = não informado.
     padroes_completos = Column(Integer, default=0, nullable=False)
     disponivel_como_ponto = Column(Boolean, default=False, nullable=False)
     trocas_como_ponto_concluidas = Column(Integer, default=0, nullable=False)

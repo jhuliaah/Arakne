@@ -61,6 +61,7 @@ import PatternLoginPage from "./pages/onboarding/PatternLoginPage";
 import RecoverAccountPage from "./pages/onboarding/RecoverAccountPage";
 import RecoveryHelpRequestPage from "./pages/onboarding/RecoveryHelpRequestPage";
 import DemoSetupPage from "./pages/DemoSetupPage";
+import CarteiraTransacaoPage, { type CarteiraModo } from "./pages/CarteiraTransacaoPage";
 import RecoveryScanner from "./components/RecoveryScanner";
 import RecoveryBell from "./components/RecoveryBell";
 import RecoveryQRGenerator from "./components/RecoveryQRGenerator";
@@ -73,6 +74,7 @@ import {
   markUnlockedThisSession,
   login,
   setToken,
+  setPin as setStoredPin,
   setIdentificador as setStoredIdentificador,
   fetchRecoveryShare,
   getAvalistasRecuperacao,
@@ -111,6 +113,7 @@ type View =
   | "financial"
   | "extrato"
   | "scannerQR"
+  | "carteiraTransacao"
   | "decoy";
 
 const NAV_TO_VIEW: Record<NavTarget, View> = {
@@ -125,6 +128,7 @@ const BACK_TO_CATALOG_VIEWS: View[] = [
   "financial",
   "extrato",
   "scannerQR",
+  "carteiraTransacao",
   "decoy",
   "comunidade",
   "projetos",
@@ -176,6 +180,9 @@ export default function App() {
   // Set when ScannerQRPage successfully reads a code — consumed once by
   // FinancialPage to pre-fill the troca form, then cleared.
   const [scannedIdentificador, setScannedIdentificador] = useState<string | null>(null);
+  // Modo da tela de transação da cesta de novelos (entregar/receber/devolver).
+  // Definido pelo FinancialPage antes de navegar para carteiraTransacao.
+  const [carteiraModo, setCarteiraModo] = useState<CarteiraModo>("receber");
   // Trilha/aula navigation state for the learning trails.
   const [selectedTrilhaId, setSelectedTrilhaId] = useState<number | null>(null);
   const [selectedAula, setSelectedAula] = useState<Aula | null>(null);
@@ -401,6 +408,11 @@ export default function App() {
         }}
         onCreateAccount={() => setView("createAccount")}
         onForgotPattern={() => setView("recoverAccount")}
+        // Volta para a tela de origem: convite (se a usuária veio de um
+        // link /convite/...) ou splash (caso contrário). Evita dead-end
+        // quando a usuária chegou aqui por engano e quer voltar sem
+        // desenhar o Ponto Arakne.
+        onBack={() => setView(inviteCodigo ? "inviteDecision" : "splash")}
       />
     );
   }
@@ -430,6 +442,12 @@ export default function App() {
           setView("recoveryScanner");
         }}
         onBack={() => setView("recoverAccount")}
+        // BUG 4: quando a conta não tem tecelãs de confiança vinculadas,
+        // a tela de erro oferece "Ir ao meu ateliê" → FinancialPage,
+        // onde a usuária pode vincular uma tecelã (seção "Tecelã de
+        // confiança"). Antes, só havia "Tentar de novo" / "Voltar",
+        // deixando a convidada sem caminho acionável.
+        onGoToAtelie={() => setView("financial")}
       />
     );
   }
@@ -526,6 +544,23 @@ export default function App() {
         onAbrirScanner={() => setView("scannerQR")}
         prefilledPontoIdentificador={scannedIdentificador}
         onPrefillConsumed={() => setScannedIdentificador(null)}
+        onAbrirCarteira={(modo) => {
+          setCarteiraModo(modo);
+          setView("carteiraTransacao");
+        }}
+      />
+    );
+  }
+
+  if (view === "carteiraTransacao") {
+    return (
+      <CarteiraTransacaoPage
+        modo={carteiraModo}
+        onBack={() => setView("financial")}
+        onTransacaoConcluida={() => {
+          // Apenas volta ao financial — o FinancialPage refresca o
+          // saldo/tier no seu próprio loadData quando re-monta.
+        }}
       />
     );
   }
@@ -674,9 +709,14 @@ function RecoveryCombineView({ share0, ownerNpub, onSuccess, onCancel }: Recover
       }
       setToken(loginResp.token);
       setStoredIdentificador(id);
+      // P1 (auditoria item 9): setPin + token direto — mesmo fix do BUG 3
+      // aplicado em recovery-request.ts. Sem setPin, ensureToken não consegue
+      // re-logar se getMe falhar (race/latência) e quebra re-login futuro.
+      setStoredPin(pinTrim);
 
-      // 2. Busca a share 1 criptografada no backend.
-      const blob = await fetchRecoveryShare();
+      // 2. Busca a share 1 criptografada no backend (token direto evita
+      //    round-trip getMe do ensureToken — ponto de falha do BUG 3).
+      const blob = await fetchRecoveryShare(loginResp.token);
       if (!blob) {
         setError("Não encontramos seu fio no ateliê central. Confira o identificador.");
         setLoading(false);

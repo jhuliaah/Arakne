@@ -32,6 +32,15 @@ class UsuariaCreate(BaseModel):
         description="Apelido público da usuária (opcional, max 80 chars). "
         "Exibido em telas de vinculação de tecelãs em vez do npub truncado.",
     )
+    pais: Optional[str] = Field(
+        None,
+        min_length=2,
+        max_length=2,
+        pattern=r"^[A-Z]{2}$",
+        description="Código de país ISO 3166-1 alpha-2 (ex: \"BR\"). "
+        "Opcional — usado para liberar/bloquear pagamentos Pix (off-ramp), "
+        "que só faz sentido no Brasil.",
+    )
 
 
 class UsuariaResponse(BaseModel):
@@ -51,6 +60,7 @@ class UsuariaResponse(BaseModel):
     criado_em: datetime
     npub: Optional[str] = None
     apelido: Optional[str] = None
+    pais: Optional[str] = None
 
 
 class NpubUpdate(BaseModel):

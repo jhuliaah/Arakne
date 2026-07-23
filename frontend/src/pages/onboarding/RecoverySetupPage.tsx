@@ -37,6 +37,7 @@ import { useEffect, useState } from "react";
 import Header from "../../components/Header";
 import { ensureToken, getAvalistasRecuperacao, markUnlockedThisSession, type AvalistaRecuperacao } from "../../api";
 import { distributeShares, isDistributed, type DistributeResult } from "../../lib/recovery-distribute";
+import { useDelayedFlag } from "../../lib/useDelayedFlag";
 
 interface RecoverySetupPageProps {
   /** npub da dona (bech32 npub1...). */
@@ -74,6 +75,11 @@ export default function RecoverySetupPage({ npub, nsec, pin, onDone, onBack }: R
   const [fetchError, setFetchError] = useState(false);
   const [result, setResult] = useState<DistributeResult | null>(null);
   const [alreadyDistributed, setAlreadyDistributed] = useState(false);
+
+  // Anti-flicker: só mostra o skeleton se a busca demorar mais que 500ms.
+  // Em carregamentos rápidos (rede local / cache), o skeleton pisca e
+  // atrapalha — o useDelayedFlag evita esse flash.
+  const showSkeleton = useDelayedFlag(phase === "loading", 500);
 
   // ── Busca os avalistas do backend ao montar ───────────────
   useEffect(() => {
@@ -175,16 +181,16 @@ export default function RecoverySetupPage({ npub, nsec, pin, onDone, onBack }: R
 
         {/* Lista de avalistas */}
         <ul className="tecelas-list">
-          {phase === "loading" && (
+          {showSkeleton && (
             <li className="tecelas-list__item tecelas-list__item--skeleton">
               <span className="skeleton skeleton--text" />
               <span className="skeleton skeleton--text skeleton--short" />
             </li>
           )}
-          {phase !== "loading" && avalistas.length === 0 && (
+          {!showSkeleton && phase !== "loading" && avalistas.length === 0 && (
             <li className="tecelas-list__empty">
               {fetchError
-                ? "Não foi possível carregar suas tecelãs agora. Você pode tentar de novo em instantes."
+                ? "Não foi possível carregar suas tecelãs agora. Tente de novo em instantes."
                 : "Você não indicou uma tecelã de confiança. Vamos guardar um fio de reserva no ateliê central e outro com você."}
             </li>
           )}
@@ -221,7 +227,11 @@ export default function RecoverySetupPage({ npub, nsec, pin, onDone, onBack }: R
 
         {phase === "error" && (
           <div className="tecelas-error">
-            <p>Não conseguimos distribuir seus fios agora. Tente novamente.</p>
+            <p>
+              Não conseguimos distribuir seus fios agora. Verifique sua
+              internet e tente de novo — seus fios de sustentação ficam
+              guardados assim que a conexão voltar.
+            </p>
           </div>
         )}
 

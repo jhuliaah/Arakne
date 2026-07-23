@@ -52,6 +52,11 @@ class LNbitsService:
         }
 
     @staticmethod
+    def _mock_balance() -> dict:
+        # Saldo fixo de demo — 50.000 sats. Determinístico pra testes.
+        return {"balance_msats": 50_000 * 1000}
+
+    @staticmethod
     def _mock_invoice(amount: int, memo: str) -> dict:
         return {
             "payment_hash": "mock_" + secrets.token_hex(16),
@@ -119,7 +124,18 @@ class LNbitsService:
             return self._mock_pay(bolt11)
 
     def check_payment(self, wallet_key: str, payment_hash: str) -> bool:
-        """Check if an invoice has been paid."""
+        """Check if an invoice has been paid.
+
+        Em mock mode, devolve True (simula pagamento confirmado) — o mock
+        existe pra a demo funcionar sem um nó Lightning real, então fingir
+        "pago" é o comportamento esperado.
+
+        Em runtime real, uma falha de rede/API NÃO pode mascarar como
+        "pago" um pagamento que não sabemos se foi confirmado — isso
+        faria o motor de risco subir tier de uma usuária que talvez nem
+        tenha pago. Retorna False em erro, deixando quem chama decidir
+        (polling de novo, alertar, etc.).
+        """
         if self._mock or not wallet_key:
             return True
         try:
@@ -132,7 +148,30 @@ class LNbitsService:
                 return resp.json().get("paid", False)
         except Exception as e:
             logger.warning("LNbits check_payment failed: %s", e)
-            return True
+            return False
+
+    def get_wallet_balance(self, wallet_key: str) -> dict:
+        """Consulta o saldo de uma wallet em millisatoshis.
+
+        Retorna {balance_msats}. Em mock mode, devolve um saldo de demo
+        fixo (50.000 sats) pra a UI da carteira ter o que mostrar.
+        """
+        if self._mock or not wallet_key:
+            return self._mock_balance()
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.get(
+                    f"{self.base_url}/api/v1/wallet",
+                    headers={"X-API-KEY": wallet_key},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                # LNbits devolve saldo em millisatoshis.
+                return {"balance_msats": int(data.get("balance", 0))}
+        except Exception as e:
+            logger.warning("LNbits get_wallet_balance failed — switching to mock: %s", e)
+            self._mock = True
+            return self._mock_balance()
 
 
 # Module-level singleton
