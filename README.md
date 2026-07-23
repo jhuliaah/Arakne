@@ -233,20 +233,193 @@ Fluxo com **aprovação explícita da fornecedora**: solicitante pede troca
 
 ## Integração com LNbits
 
-Sem `LNBITS_ADMIN_KEY` / `LNBITS_POOL_KEY`, o backend opera em **modo mock**
-(simula invoices e saldo). Para pagamentos reais:
+⚠️ **O LNbits do `docker-compose.yml` (Bitcoin/LND próprios) roda em
+regtest — rede isolada, sem conexão com a Lightning Network real.** Serve
+pra desenvolvimento/demo local, mas **não recebe pagamentos reais vindos de
+fora** (ex.: um saque da Binance). Pra qualquer coisa com dinheiro real, use
+uma instância hospedada em mainnet:
 
-1. `docker compose up --build`
-2. Acesse `http://localhost:5000` (LNbits) → copie a admin key da wallet
-3. Crie uma wallet "pool" no LNbits e copie a admin key
-4. Crie um `.env` na raiz:
+1. Acesse `https://demo.lnbits.com`, crie conta, crie uma wallet (ex.:
+   `arakne-pool`)
+2. Copie a **Admin key** e a **Invoice/read key** (ícone de chave dentro da
+   wallet)
+3. No `.env` da raiz:
    ```bash
+   LNBITS_URL=https://demo.lnbits.com
    LNBITS_ADMIN_KEY=sua_admin_key_aqui
-   LNBITS_POOL_KEY=sua_pool_admin_key_aqui
+   LNBITS_POOL_KEY=mesma_admin_key_aqui
    ```
-5. `docker compose restart backend`
+4. Reinicie o backend
+
+Sem essas variáveis, o backend cai em **modo mock** (simula invoices e
+saldo) — é o que roda `seed_demo.py`/`run_demo.py`, sem tocar em nada real.
 
 ---
+
+## Pix (Mercado Pago) — repagamento
+
+Repagamento de empréstimo via Pix Cobrança dinâmica, `txid` único por
+transação (atribuição sem mapear identidade real — ver seção 8 do doc
+mestre).
+
+1. Conta de teste no [Mercado Pago Developers](https://www.mercadopago.com.br/developers)
+   → **Credenciais de teste** → Checkout Transparente
+2. Copie o **Access Token** (não a Public Key — são campos diferentes, o
+   Access Token é bem mais longo, formato `TEST-xxxxxxxx-xxxxxx-...`)
+3. No `.env`:
+   ```bash
+   MP_ACCESS_TOKEN=TEST-seu-token-aqui
+   MP_WEBHOOK_URL=https://sua-url-publica/pix/webhook  # ex.: túnel cloudflared
+   ```
+4. Pra receber confirmação automática, exponha o backend publicamente:
+   ```bash
+   cloudflared tunnel --url http://localhost:8000
+   ```
+   e cole a URL gerada (com `/pix/webhook` no final) em `MP_WEBHOOK_URL`.
+
+**Limitação conhecida do sandbox:** pagamentos Pix em ambiente de teste na
+API `/v1/payments` (Checkout Transparente) ficam `pending` pra sempre — não
+existe simulação de pagamento via banco nessa API específica. Funciona
+normal em produção; é só o sandbox que não fecha o loop sozinho.
+
+Endpoints: `POST /pix/emprestimos/{id}/cobranca`, `GET /pix/pagamentos/{txid}`,
+`POST /pix/webhook`.
+
+---
+
+## Binance — conversão BRL↔sats
+
+Fecha o ciclo financeiro: BRL do repagamento Pix vira sats de volta pro
+pool (seção 20 do doc mestre).
+
+1. Conta na [Binance](https://www.binance.com), KYC completo (biometria +
+   documento — costuma ser rápido)
+2. **Perfil → Gerenciamento de API** → criar chave (HMAC)
+3. Permissões: **Enable Reading** + **Enable Spot & Margin Trading** +
+   **Enable Withdrawals**. A última exige restrição de IP — pegue o seu com
+   `curl ifconfig.me` e cole na tela de criação da chave.
+4. ⚠️ **A Secret Key só aparece uma vez** — copie os dois valores (API Key
+   e Secret Key) antes de fechar a tela, ou terá que gerar outra.
+5. ⚠️ **Toda conta nova (ou chave nova) fica com saque travado por 24-48h**
+   por segurança da própria Binance — sem exceção, sem como acelerar.
+6. No `.env`:
+   ```bash
+   BINANCE_API_KEY=sua_api_key
+   BINANCE_API_SECRET=sua_secret_key
+   ```
+
+Métodos em `services/exchange.py`: `cotacao_btc_brl()` (pública),
+`comprar_btc_mercado()`, `vender_btc_mercado()`, `sacar_lightning()`,
+`gerar_invoice_deposito()`, `sacar_onchain()`. Diferente do LNbits/Pix, erro
+real **nunca** cai em mock silencioso aqui — levanta `BinanceError`
+explicitamente (envolve dinheiro real, mascarar falha como sucesso criaria
+inconsistência contábil).
+
+---
+
+## Custódia — reserva fria multisig
+
+Gerador offline (`scripts/gerar_multisig.py`, via `embit`), sem precisar de
+nó Bitcoin rodando:
+
+```bash
+pip3 install -r scripts/requirements-multisig.txt --break-system-packages
+
+# Demo — uma pessoa gera as 3 chaves. Só pra provar viabilidade técnica,
+# NUNCA use com fundos de terceiros (anula o propósito da multisig).
+# ⚠️ Rode FORA da pasta do repositório (o .json de saída tem as mnemonics
+# e NUNCA pode ser commitado — já vazou uma vez nesta sessão).
+mkdir -p ~/multisig-arakne && cd ~/multisig-arakne
+python3 ~/Arakne/scripts/gerar_multisig.py --gerar-3-demo --network mainnet
+
+# Produção — cada steward gera a própria chave isolada, só o xpub é
+# compartilhado (nunca a mnemonic)
+python3 ~/Arakne/scripts/gerar_multisig.py --gerar-1-steward --network mainnet
+python3 ~/Arakne/scripts/gerar_multisig.py --combinar-xpubs steward1.json steward2.json steward3.json --network mainnet
+```
+
+Cola o descriptor/endereço gerado no `.env`:
+```bash
+MULTISIG_DESCRIPTOR=wsh(sortedmulti(2,...))#checksum
+MULTISIG_ENDERECO=bc1q...
+MULTISIG_QUORUM=2-de-3
+MULTISIG_NETWORK=mainnet
+```
+
+Referência de leitura: `GET /custodia/reserva-fria` (nunca expõe chave
+privada; lê do banco ou, na ausência, do `.env`).
+
+**Importar no [Sparrow Wallet](https://sparrowwallet.com/):** `File → New
+Wallet → Multisig`, cole os 3 `Zpub.../fingerprint/caminho de derivação`,
+quorum 2-de-3. O endereço calculado pelo Sparrow deve bater com
+`MULTISIG_ENDERECO`.
+
+### Ponte quente → fria
+
+O pool (LNbits) fala só Lightning; a reserva fria é on-chain — não existe
+transferência direta entre os dois. A ponte usa a Binance como conversor de
+protocolo: LNbits paga uma invoice → Binance recebe via Lightning → Binance
+saca on-chain pra multisig.
+
+```bash
+# SEMPRE rode sem a flag primeiro — mostra o que faria, não executa nada
+python3 scripts/mover_pool_para_reserva_fria.py
+
+# Só depois de conferir os valores acima
+python3 scripts/mover_pool_para_reserva_fria.py --confirmar-envio-real
+```
+
+---
+
+## Breez SDK — carteira individual da usuária
+
+Carteira Lightning **não-custodial** por usuária (distinto do pool, que é
+custodial de propósito — ver seção 6 do doc mestre). Nunca use isto para a
+wallet do pool.
+
+1. Chave de API gratuita: [breez.technology](https://breez.technology) →
+   formulário "Request API Key"
+2. `cd frontend && npm install` (já inclui `@breeztech/breez-sdk-spark`)
+3. No `.env` do frontend (`frontend/.env`, não o da raiz):
+   ```bash
+   VITE_BREEZ_API_KEY=sua_chave_aqui
+   ```
+4. Teste isolado (sem precisar da UI):
+   ```bash
+   cd frontend
+   VITE_BREEZ_API_KEY=sua_chave npx tsx scripts/test-breez-wallet.ts
+   ```
+
+A seed da carteira Breez deriva dos mesmos bytes do `nsec` da identidade
+Nostr da usuária (`src/lib/breez-wallet.ts::mnemonicFromNsecBytes`) — não é
+NIP-06 (abandonado, ver `src/lib/nostr-keys.ts`), é uma reinterpretação
+determinística da mesma chave mestra em formato BIP-39, só porque o SDK
+exige mnemonic como entrada.
+
+⚠️ Módulo escrito com base na família de SDKs Breez (Liquid/Spark
+compartilham desenho); a versão Spark é recente — confira o autocomplete do
+TypeScript contra a versão instalada antes de confiar cegamente nos nomes
+exatos de método em `receberPagamento`/`prepararEnvio`.
+
+---
+
+## `.env.mock` — demo sem nenhuma credencial real
+
+Pra rodar a demo pros avaliadores (ou qualquer teste) com **zero risco** de
+tocar em dinheiro/conta real:
+
+```bash
+cp .env.mock .env
+cd backend && python3 seed_demo.py && python3 run_demo.py
+```
+
+Todo campo em `.env.mock` é vazio de propósito — LNbits, Pix e Binance caem
+em mock sozinhos. Nunca sobrescreva isso com o `.env` que tem suas
+credenciais reais de trabalho.
+
+---
+
+
 
 ## Estrutura do repositório
 
