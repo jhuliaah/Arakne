@@ -166,9 +166,17 @@ def test_consultar_cobranca_pix_inexistente_retorna_404(client, db_session):
     assert resp.status_code == 404
 
 
-def test_custodia_reserva_fria_vazia_por_padrao(client, db_session):
+def test_custodia_reserva_fria_vazia_por_padrao(client, db_session, monkeypatch):
     """Sem MULTISIG_* configurado nem linha no banco, o endpoint informa
-    que ainda não há reserva fria registrada — não quebra."""
+    que ainda não há reserva fria registrada — não quebra.
+
+    Força as env vars vazias explicitamente (monkeypatch), em vez de supor
+    que o ambiente onde os testes rodam está vazio — numa máquina de
+    desenvolvedora com um .env de trabalho real (multisig já gerada,
+    credenciais reais), esse teste quebrava porque o valor real vazava
+    pro teste."""
+    monkeypatch.setattr("app.routers.custodia.MULTISIG_DESCRIPTOR", "")
+    monkeypatch.setattr("app.routers.custodia.MULTISIG_ENDERECO", "")
     resp = client.get("/custodia/reserva-fria")
     assert resp.status_code == 200
     assert resp.json()["configurado"] is False
