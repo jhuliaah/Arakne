@@ -179,6 +179,18 @@ export default function RecoverAccountPage({
       // dona precisa usar o paper backup (fallback E′).
       setHasConvidadora(result.published > 0);
 
+      // P2 (auditoria item 9): se o login falhou (PIN incorreto), mostra
+      // feedback imediato em vez de esperar 60s de timeout. Mesmo que
+      // published > 0 (convidadora recebeu o pedido), sem backendShare a
+      // recuperação nunca atinge threshold T=2.
+      if (result.loginFailed) {
+        setErrorMsg(
+          "Código de reserva incorreto. Confira o identificador e o PIN.",
+        );
+        setPhase("error");
+        return;
+      }
+
       // Se não há convidadora e a share 1 do backend veio, vamos direto
       // ao estado de espera pelo paper backup (sem subscribe NIP-59).
       if (result.published === 0) {
