@@ -1077,6 +1077,22 @@ h1, h2, h3,
   background: rgba(46, 74, 125, 0.06);
 }
 
+/* ── Focus rings visíveis (WCAG 2.1 AA) ─────────────────────
+   `:focus-visible` só ativa em navegação por teclado (não em
+   clique/toque), mantendo o visual limpo em uso normal e garantindo
+   focus ring para quem navega por Tab. Outline 2px + offset 2px dá
+   contraste suficiente contra qualquer fundo do app. O `.field__input`
+   já muda a borda no :focus (mouse e teclado); o outline aqui
+   complementa só no teclado sem sobrepor. */
+.btn:focus-visible,
+.field__input:focus-visible,
+.onboarding__back:focus-visible,
+.onboarding__footer-link button:focus-visible,
+.checkbox-row input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 /* ── Checkbox row ────────────────────────────────────────── */
 .checkbox-row {
   display: flex;

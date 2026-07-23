@@ -407,6 +407,11 @@ export default function App() {
         }}
         onCreateAccount={() => setView("createAccount")}
         onForgotPattern={() => setView("recoverAccount")}
+        // Volta para a tela de origem: convite (se a usuária veio de um
+        // link /convite/...) ou splash (caso contrário). Evita dead-end
+        // quando a usuária chegou aqui por engano e quer voltar sem
+        // desenhar o Ponto Arakne.
+        onBack={() => setView(inviteCodigo ? "inviteDecision" : "splash")}
       />
     );
   }
