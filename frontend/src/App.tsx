@@ -74,6 +74,7 @@ import {
   markUnlockedThisSession,
   login,
   setToken,
+  setPin as setStoredPin,
   setIdentificador as setStoredIdentificador,
   fetchRecoveryShare,
   getAvalistasRecuperacao,
@@ -708,9 +709,14 @@ function RecoveryCombineView({ share0, ownerNpub, onSuccess, onCancel }: Recover
       }
       setToken(loginResp.token);
       setStoredIdentificador(id);
+      // P1 (auditoria item 9): setPin + token direto — mesmo fix do BUG 3
+      // aplicado em recovery-request.ts. Sem setPin, ensureToken não consegue
+      // re-logar se getMe falhar (race/latência) e quebra re-login futuro.
+      setStoredPin(pinTrim);
 
-      // 2. Busca a share 1 criptografada no backend.
-      const blob = await fetchRecoveryShare();
+      // 2. Busca a share 1 criptografada no backend (token direto evita
+      //    round-trip getMe do ensureToken — ponto de falha do BUG 3).
+      const blob = await fetchRecoveryShare(loginResp.token);
       if (!blob) {
         setError("Não encontramos seu fio no ateliê central. Confira o identificador.");
         setLoading(false);

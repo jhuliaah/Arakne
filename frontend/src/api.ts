@@ -21,6 +21,7 @@ const STORAGE_KEYS = {
   pin: "arakne_pin",
   token: "arakne_token",
   emprestimos: "arakne_emprestimo_ids",
+  pixTxids: "arakne_pix_txids",
   avalCodigos: "arakne_aval_codigos",
   onboardingDone: "arakne_onboarding_done",
   nickname: "arakne_nickname",
@@ -88,6 +89,25 @@ export function addEmprestimoId(id: number): void {
   if (!ids.includes(id)) {
     ids.push(id);
     localStorage.setItem(STORAGE_KEYS.emprestimos, JSON.stringify(ids));
+  }
+}
+
+// ── Pix txids (rastreamento de repagamentos via Pix) ────────
+// Mesmo padrão de arakne_emprestimo_ids: o backend não tem endpoint
+// "listar pagamentos Pix por usuária", só GET /pix/pagamentos/{txid}.
+// Rastreamos cada txid criado via criarCobrancaPix no localStorage e
+// hidratamos a timeline do ExtratoPage com polling individual.
+
+export function getPixTxids(): string[] {
+  const raw = localStorage.getItem(STORAGE_KEYS.pixTxids);
+  return raw ? JSON.parse(raw) as string[] : [];
+}
+
+export function addPixTxid(txid: string): void {
+  const txids = getPixTxids();
+  if (!txids.includes(txid)) {
+    txids.push(txid);
+    localStorage.setItem(STORAGE_KEYS.pixTxids, JSON.stringify(txids));
   }
 }
 
@@ -780,7 +800,9 @@ export async function iniciarAula(
 
 /** Gera cobrança Pix para repagar (parte de) um empréstimo.
  *  Na UI aparece como "concluir o padrão" — nunca como fatura.
- *  Endpoint: POST /pix/emprestimos/{id}/cobranca. */
+ *  Endpoint: POST /pix/emprestimos/{id}/cobranca.
+ *  Após criar com sucesso, rastreia o txid no localStorage para
+ *  alimentar a timeline do ExtratoPage (polling individual). */
 export async function criarCobrancaPix(
   emprestimoId: number,
   valorSats: number,
@@ -796,7 +818,10 @@ export async function criarCobrancaPix(
       body: JSON.stringify({ valor_sats: valorSats, valor_centavos_brl: valorCentavosBrl }),
     });
     if (!resp.ok) return null;
-    return await resp.json();
+    const cobranca = await resp.json();
+    // Rastreia o txid para a timeline do ExtratoPage.
+    if (cobranca?.txid) addPixTxid(cobranca.txid);
+    return cobranca;
   } catch {
     return null;
   }
@@ -814,6 +839,19 @@ export async function getStatusPagamentoPix(txid: string): Promise<StatusPagamen
   } catch {
     return null;
   }
+}
+
+/** Busca o status de todos os txids Pix rastreados no localStorage
+ *  (criados via criarCobrancaPix). Faz as chamadas em paralelo com
+ *  Promise.all e ignora nulls (txid expirado/inválido/erro de rede).
+ *  Usado pelo ExtratoPage para incluir repagamentos via Pix na timeline. */
+export async function getTodosStatusPix(): Promise<StatusPagamentoPix[]> {
+  const txids = getPixTxids();
+  if (txids.length === 0) return [];
+  const resultados = await Promise.all(
+    txids.map((txid) => getStatusPagamentoPix(txid))
+  );
+  return resultados.filter((s): s is StatusPagamentoPix => s !== null);
 }
 
 /** Dados públicos da custódia multisig ativa (reserva fria).

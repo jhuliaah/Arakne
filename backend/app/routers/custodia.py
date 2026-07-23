@@ -8,11 +8,12 @@ sozinha move fundos", e isso vale também pra quem registra o que é a
 reserva fria oficial).
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.auth import _naive_utc
 from app.config import (
     MULTISIG_DESCRIPTOR,
     MULTISIG_ENDERECO,
@@ -57,7 +58,7 @@ def get_reserva_fria(db: Session = Depends(get_db)):
             if "-de-" in MULTISIG_QUORUM
             else 3,
             network=MULTISIG_NETWORK,
-            criado_em=datetime.utcnow(),
+            criado_em=_naive_utc(datetime.now(UTC)),
         )
 
     return CustodiaMultisigVazia()

@@ -3,7 +3,8 @@
 App de aprendizado de crochê/tecelagem que, por baixo, é uma rede de
 microcrédito peer-to-peer via Lightning Network para mulheres sem acesso
 bancário por controle financeiro coercitivo. O crochê é a superfície visível;
-as funcionalidades financeiras são reveladas por gestos de busca ocultos.
+as funcionalidades financeiras são reveladas por gestos ocultos (desenhar o
+Ponto Arakne na aula-portal da trilha 9).
 
 Projeto do hackathon **hack4freedom** (só mulheres).
 
@@ -49,48 +50,44 @@ Projeto do hackathon **hack4freedom** (só mulheres).
 
 ## Pré-requisitos
 
-- **Docker** 24+
-- **Docker Compose** v2+ (`docker compose` — não o `docker-compose` legado)
-
-### Pre-pull de imagens (offline)
-
-```bash
-docker pull lncm/bitcoind:26.0
-docker pull lightninglabs/lnd:v0.18.0-beta
-docker pull lnbits/lnbits:0.12.9
-docker pull python:3.12-slim
-docker pull node:20-slim
-```
-
----
-
-## Como subir tudo
-
-```bash
-docker compose up --build
-bash scripts/init-lightning.sh   # em outro terminal, APÓS compose up
-```
+- **Docker** 24+ e **Docker Compose** v2+ (para stack completa)
+- **Python 3.12+** e **Node 20+** (para desenvolvimento local sem Docker)
 
 ### Desenvolvimento local (sem Docker)
+
+Há um script que sobe backend + frontend com venv automático:
+
+```bash
+bash scripts/dev-up.sh --all   # cria venv, instala deps, roda seed + multisig, sobe tudo
+```
+
+Ou manualmente:
 
 **Backend:**
 ```bash
 cd backend
+python3 -m venv .venv && source .venv/bin/activate   # PEP 668 (Python 3.14)
 pip install -r requirements.txt
 python seed_demo.py                                   # reseta DB + cria FUNDADORA + FORNECEDORA
 uvicorn app.main:app --port 8000 --reload --reload-exclude "*.db" --reload-exclude "*.db-*"
 ```
 
 > **Importante:** o `--reload-exclude "*.db"` é obrigatório em desenvolvimento
-> local. Sem ele, o uvicorn assiste o diretório `backend/` e recarrega a cada
-> escrita no `arakne.db` (login, concluir aula, troca, empréstimo) — o backend
-> cai após poucos segundos de uso. O `Dockerfile` já aplica o exclude.
+> local. Sem ele, o uvicorn recarrega a cada escrita no `arakne.db` e derruba
+> o servidor.
 
 **Frontend:**
 ```bash
 cd frontend
-npm install
+npm install --legacy-peer-deps   # --legacy-peer-deps: @vitejs/plugin-react vs vite 8
 npm run dev    # vite em :5173, proxy /api -> backend
+```
+
+### Stack completa (Docker)
+
+```bash
+docker compose up --build
+bash scripts/init-lightning.sh   # em outro terminal, APÓS compose up
 ```
 
 ### Verificação rápida
@@ -124,27 +121,12 @@ A usuária escolhe um PIN (4-8 dígitos) e um apelido opcional. O sistema gera:
 - **`identificador`** — string opaca (login/e-mail substituto)
 - **`codigo_indicacao`** — código de convite próprio (para tier 3)
 - **`apelido`** — nome de exibição (opcional, mostrado em vez do npub)
+- **`pais`** — país (ISO alpha-2, ex: "BR" — habilita pagamentos via Pix)
 - **`pin_hash`** — PIN hasheado com bcrypt
 
 Tokens de sessão são strings opacas, 30 dias de expiração. CORS é
 `allow_origins=["*"]` com `allow_credentials=False` (Bearer-token auth,
 sem cookies).
-
-### Endpoints de usuária
-
-| Método | Path                                          | Auth | Descrição                                  |
-|--------|-----------------------------------------------|------|--------------------------------------------|
-| POST   | `/usuarias`                                   | —    | Criar usuária (PIN 4-8 dígitos + apelido)   |
-| GET    | `/usuarias/me`                                | Bearer | Dados da própria usuária                 |
-| PATCH  | `/usuarias/me/npub`                           | Bearer | Vincular npub Nostr (demo-setup)         |
-| PATCH  | `/usuarias/me/apelido`                        | Bearer | Atualizar apelido                        |
-| GET    | `/usuarias/me/convite`                        | Bearer | Gerar link de convite (tier 3+)          |
-| GET    | `/usuarias/me/avalistas-recuperacao`          | Bearer | Lista de tecelãs vinculadas              |
-| POST   | `/usuarias/me/avalistas-recuperacao`          | Bearer | Vincular tecelã posteriormente           |
-| POST   | `/usuarias/me/recovery-share`                 | Bearer | Upsert share 1 (criptografada com PIN)    |
-| GET    | `/usuarias/me/recovery-share`                 | Bearer | Baixar share 1                            |
-| GET    | `/usuarias/by-identificador/{id}/npub`        | —    | Lookup público de npub                    |
-| GET    | `/usuarias/by-identificador/{id}/avalistas-recuperacao` | — | Lookup público de tecelãs (com apelido) |
 
 ---
 
@@ -196,10 +178,10 @@ não tem.
 
 | Método | Path                          | Auth | Descrição                          |
 |--------|-------------------------------|------|------------------------------------|
-| POST   | `/emprestimos/{identificador}` | Bearer | Solicitar empréstimo (gera invoice) |
-| POST   | `/emprestimos/{id}/pagamento`  | Bearer | Pagar (parcial ou total)           |
-| GET    | `/emprestimos/{id}`            | Bearer | Detalhes                           |
-| GET    | `/emprestimos/{id}/status`     | Bearer | Polling LNbits                     |
+| POST   | `/emprestimos/{identificador}` | —    | Solicitar empréstimo (gera invoice) |
+| POST   | `/emprestimos/{id}/pagamento`  | —    | Pagar (parcial ou total)           |
+| GET    | `/emprestimos/{id}`            | —    | Detalhes                           |
+| GET    | `/emprestimos/{id}/status`     | —    | Polling LNbits                     |
 
 ### Pontos de Troca (Fornecedora de Linha)
 
@@ -222,21 +204,37 @@ Fluxo com **aprovação explícita da fornecedora**: solicitante pede troca
 |--------|----------|------|------------------------------------|
 | POST   | `/avais` | —    | Uma usuária avalia outra (tier 0→1) |
 
-### Pix e Custódia (time financeiro)
+### Pix (Mercado Pago)
+
+| Método | Path                              | Auth | Descrição                          |
+|--------|-----------------------------------|------|------------------------------------|
+| POST   | `/pix/emprestimos/{id}/cobranca`  | —    | Gerar cobrança Pix para repagamento |
+| GET    | `/pix/pagamentos/{txid}`          | —    | Status da cobrança (polling)       |
+| POST   | `/pix/webhook`                    | —    | Webhook Mercado Pago (confirmação) |
+
+### Carteira (Cesta de novelos)
+
+| Método | Path                          | Auth | Descrição                          |
+|--------|-------------------------------|------|------------------------------------|
+| GET    | `/carteira/cotacao`           | Bearer | Cotação BTC/BRL (Binance)        |
+| GET    | `/carteira/saldo`             | Bearer | Saldo em sats + BRL convertido   |
+| GET    | `/carteira/transacoes`        | Bearer | Extrato da carteira              |
+| POST   | `/carteira/depositar`         | Bearer | Gerar QR Pix para depósito        |
+| POST   | `/carteira/pagar`             | Bearer | Pagar comerciante via Pix (off-ramp) |
+| POST   | `/carteira/gerar-quitacao`    | Bearer | Gerar QR Pix para quitar empréstimo |
+
+### Custódia (reserva fria multisig)
 
 | Método | Path                  | Auth | Descrição                          |
 |--------|-----------------------|------|------------------------------------|
-| POST   | `/pix/cobranca`       | Bearer | Gerar cobrança Pix                |
-| GET    | `/pix/cobranca/{txid}` | Bearer | Status da cobrança               |
-| POST   | `/pix/webhook`        | —    | Webhook Mercado Pago              |
-| GET    | `/custodia`           | —    | Dados públicos da reserva fria multisig |
+| GET    | `/custodia/reserva-fria` | —    | Dados públicos da reserva fria multisig |
 
 ---
 
 ## Integração com LNbits
 
 Sem `LNBITS_ADMIN_KEY` / `LNBITS_POOL_KEY`, o backend opera em **modo mock**
-(simula invoices). Para pagamentos reais:
+(simula invoices e saldo). Para pagamentos reais:
 
 1. `docker compose up --build`
 2. Acesse `http://localhost:5000` (LNbits) → copie a admin key da wallet
@@ -258,27 +256,29 @@ arakne/
 ├── AGENTS.md                    # convenções de desenvolvimento
 ├── Arakne-documento-mestre.md   # referência arquitetural canônica
 ├── config/                      # bitcoin + lnd (regtest)
-├── scripts/                     # init-lightning, multisig
+├── scripts/                     # dev-up.sh, init-lightning, multisig
 ├── src/                         # app Nostr híbrido (React 19 + Nostrify)
 ├── backend/
 │   ├── seed_demo.py             # reseta DB + cria FUNDADORA + FORNECEDORA
 │   ├── run_demo.py              # demo end-to-end via API (<10s, mock)
 │   └── app/
 │       ├── main.py              # FastAPI app + create_all() + drift safety
-│       ├── models/              # 11 modelos (Usuaria, Sessao, Emprestimo,
+│       ├── models/              # 18 modelos (Usuaria, Sessao, Emprestimo,
 │       │                        #   Aval, Troca, Trilha, Aula, Material,
 │       │                        #   ProgressoAula, AvalistaRecuperacao,
-│       │                        #   RecoveryShareBackup, PagamentoPix, ...)
-│       ├── routers/             # 9 routers (health, auth, usuarias, avais,
-│       │                        #   emprestimos, pontos_troca, trilhas, pix,
-│       │                        #   custodia)
+│       │                        #   RecoveryShareBackup, PagamentoPix,
+│       │                        #   CustodiaMultisig, ConversaoPool,
+│       │                        #   TransacaoCarteira, ...)
+│       ├── routers/             # 10 routers (health, auth, usuarias,
+│       │                        #   avais, emprestimos, pontos_troca,
+│       │                        #   trilhas, pix, carteira, custodia)
 │       ├── schemas/             # Pydantic schemas
-│       ├── services/            # risco, lnbits, bech32, pix
-│       └── tests/               # pytest (111 testes)
+│       ├── services/            # risco, lnbits, bech32, pix, exchange
+│       └── tests/               # pytest (135 testes)
 └── frontend/
     ├── package.json
     └── src/
-        ├── App.tsx              # máquina de estados (sem React Router)
+        ├── App.tsx              # máquina de estados (23 views, sem React Router)
         ├── api.ts               # cliente API + localStorage keys
         ├── styles.css           # tipografia Cinzel + Fraunces + Inter
         ├── components/           # RecoveryBell, RecoveryQRGenerator,
@@ -288,10 +288,11 @@ arakne/
         ├── pages/
         │   ├── onboarding/      # Splash, CreateAccount, RecoverAccount,
         │   │                    #   RecoverySetup, RecoveryHelpRequest
-        │   ├── FinancialPage.tsx    # camada financeira (troca, QR, tecelã)
-        │   ├── PerfilPage.tsx       # bancada (nível/tier)
+        │   ├── FinancialPage.tsx    # camada financeira (cesta, troca, QR, tecelã)
+        │   ├── CarteiraTransacaoPage.tsx  # transações (entregar/receber/devolver)
+        │   ├── PerfilPage.tsx       # bancada (nível/tier, reserva do ateliê)
+        │   ├── ExtratoPage.tsx      # registro de padrões (extrato)
         │   ├── TrilhasPage.tsx      # catálogo disfarce
-        │   ├── MeusProjetosPage.tsx # trilhas em andamento
         │   └── ...
         └── types.ts
 ```
@@ -302,7 +303,7 @@ arakne/
 
 | Tabela                  | Campos principais                                                              |
 |-------------------------|--------------------------------------------------------------------------------|
-| **Usuaria**             | id, identificador, pin_hash, apelido, npub, lnbits_wallet_key, codigo_indicacao, codigo_indicacao_usado, tier (0-3), saldo_devedor, tier_congelado, avalista_id (FK self), disponivel_como_ponto, trocas_como_ponto_concluidas, padroes_completos, criado_em |
+| **Usuaria**             | id, identificador, pin_hash, apelido, npub, pais, lnbits_wallet_key, codigo_indicacao, codigo_indicacao_usado, tier (0-3), saldo_devedor, tier_congelado, avalista_id (FK self), disponivel_como_ponto, trocas_como_ponto_concluidas, padroes_completos, criado_em |
 | **Sessao**              | id, usuaria_id, token, criada_em, expira_em                                     |
 | **Emprestimo**          | id, usuaria_id, valor_sats, invoice_id, status, criado_em, quitado_em           |
 | **Aval**                | usuaria_que_avaliza_id, nova_usuaria_id, criado_em                              |
@@ -311,7 +312,10 @@ arakne/
 | **ProgressoAula**       | usuaria_id, aula_id, concluida, concluida_em, inscrita_em                      |
 | **AvalistaRecuperacao** | usuaria_id, npub_avaliadora, ordem, is_shadow, criado_em                        |
 | **RecoveryShareBackup** | usuaria_id (unique), encrypted_share_blob, criado_em                            |
-| **PagamentoPix / CustodiaMultisig** | (time financeiro)                                                |
+| **PagamentoPix**        | id, emprestimo_id, txid, mp_payment_id, status, valor_sats, valor_centavos_brl, criado_em, confirmado_em |
+| **CustodiaMultisig**    | id, descriptor, endereco, quorum, total_signatarios, network, ativo, criado_em |
+| **ConversaoPool**       | id, pagamento_pix_id, valor_centavos_brl, quantidade_btc, status, erro, criado_em |
+| **TransacaoCarteira**   | id, usuaria_id, tipo, valor_sats, valor_centavos_brl, cotacao_btc_brl, descricao, contraparte, status, criado_em |
 
 > **Nenhum campo de identidade real** (nome, CPF, e-mail). `avalista_id`
 > existe para o motor de risco mas **nunca aparece na interface**.
@@ -335,37 +339,17 @@ arakne/
 
 ---
 
-## Demo do júri
+## Demo do júri — roteiro completo
 
-### Preparação
-
-```bash
-cd backend
-python seed_demo.py          # reseta o banco + cria FUNDADORA + FORNECEDORA
-uvicorn app.main:app --port 8000 --reload --reload-exclude "*.db" --reload-exclude "*.db-*"
-# em outro terminal:
-cd frontend && npm run dev
-```
-
-### Roteiro automatizado (verifica todo o fluxo de microcrédito)
+### Preparação (1x)
 
 ```bash
-cd backend
-python run_demo.py    # <10s, mock mode
+bash scripts/dev-up.sh --all
 ```
 
-### Roteiro manual (pela interface)
-
-1. Abrir `http://localhost:5173/demo-setup`
-   - Gera nsec/npub, faz login da Fundadora, atualiza npub
-   - Mostra identificador + PIN + padrão + convite
-2. Abrir `http://localhost:5173/convite/FUNDADORA_INVITE`
-   - Cria Perfil 1 (convidada pela Fundadora, tier 1)
-3. Abrir `http://localhost:5173/convite/FUNDADORA_INVITE` (ou `FORNECEDORA_INVITE`)
-   - Cria Perfil 2 (mesmo link gera 2º cadastro via "Iniciar novo projeto")
-4. Na conta Fundadora: buscar "Ponto Arakne" → tela financeira
-5. Transferir (ponto de troca) entre Fundadora e Perfil 1/2
-6. Testar recuperação: deslogar → "Recuperar acesso" → "pedir aula de ponto"
+Isso sobe backend (:8000) + frontend (:5173), reseta o DB com dados demo
+(FUNDADORA + FORNECEDORA + 9 trilhas/54 aulas/127 materiais) e registra
+a custódia multisig demo.
 
 ### Dados de seed
 
@@ -375,13 +359,70 @@ python run_demo.py    # <10s, mock mode
 | Fornecedora  | `FORNECEDORA`  | 1234 | 3    | Mestra, ponto de troca para testes     |
 | Convidada    | (criada na demo) | —  | 1    | Nasce pelo link `/convite/FUNDADORA_INVITE` |
 
+### Roteiro passo a passo (~10 min)
+
+#### Cena 1 — O disfarce (2 min)
+1. Abrir `http://localhost:5173` — catálogo de trilhas de crochê
+2. Navegar pelas 9 trilhas (Ponto Baixo, Ponto Alto, Ponto Renascido...)
+3. Abrir uma trilha qualquer → ver aulas e materiais
+4. **Ponto chave:** nenhuma menção a dinheiro, cripto, empréstimo
+
+#### Cena 2 — O portal (2 min)
+1. Abrir a trilha 9 ("Ponto Renascido") → nível 1 → aula 1
+2. A aula não tem conteúdo — mostra um canvas para desenhar um padrão
+3. Desenhar o Ponto Arakne (padrão correto) → destrava a camada financeira
+4. **Ponto chave:** o gesto oculto revela o microcrédito
+
+#### Cena 3 — A FinancialPage (2 min)
+1. Após destravar, ver a FinancialPage ("Seu ateliê"):
+   - Card de nível (tier) e saldo devedor ("padrão em andamento")
+   - Cesta de novelos (carteira) com saldo e cotação
+   - Botões: Entregar novelos, Receber novelos, Devolver novelos
+   - Fornecedoras de Linha (pontos de troca)
+   - Tecelã de confiança (avalista de recuperação)
+2. **Ponto chave:** tudo em vocabulário crochê — "novelos", "fios", "ateliê"
+
+#### Cena 4 — Solicitar microcrédito (1 min)
+1. Na FinancialPage, clicar em "Puxar novelos"
+2. Informar valor em sats → cria empréstimo (mock Lightning)
+3. Ver saldo devedor aumentar + empréstimo na lista
+
+#### Cena 5 — Repagamento via Pix (2 min)
+1. Clicar em "Devolver novelos" num empréstimo
+2. Escolher "Pagar com Pix" → gera QR code Pix
+3. (Em mock mode, o webhook aprova automaticamente em ~3s)
+4. Ver "Pagamento confirmado! Novelos devolvidos."
+5. Ver saldo devedor zerar + tier subir
+
+#### Cena 6 — Cesta de novelos (carteira) (1 min)
+1. Na FinancialPage, ver o card "Cesta de novelos"
+2. Clicar "Receber novelos" → tela de transação
+3. Selecionar país (Brasil habilita pagamento)
+4. Informar valor em BRL → gera QR Pix para depósito
+
+#### Cena 7 — Recuperação social (2 min)
+1. Sair da conta (sem apagar identidade)
+2. Tela de login → "Recuperar acesso"
+3. Escolher "Pedir aula de ponto a uma tecelã"
+4. Informar identificador → ver tecelãs vinculadas (com apelido)
+5. Pedir ajuda → "Aguardando resposta da tecelã"
+6. (Em outra conta, a tecelã vê o sino 🎀 e responde)
+7. Escanear QR da tecelã → combinar shares → recuperar conta
+
+### Roteiro automatizado (verifica todo o fluxo de microcrédito)
+
+```bash
+cd backend
+python run_demo.py    # <10s, mock mode
+```
+
 ---
 
 ## Notas de segurança
 
 - A tela inicial é um catálogo de padrões de crochê — **nenhum símbolo cripto** visível.
 - Notificações usam linguagem têxtil ("novo padrão disponível", "aula de ponto").
-- O gesto de busca por um padrão-código revela a tela financeira.
+- O gesto de desenhar o Ponto Arakne revela a tela financeira.
 - O grafo de avalistas **nunca** aparece na interface.
 - PIN hasheado com bcrypt — nunca armazenado em texto puro.
 - Tokens de sessão são opacos e expiram em 30 dias.

@@ -124,7 +124,18 @@ class LNbitsService:
             return self._mock_pay(bolt11)
 
     def check_payment(self, wallet_key: str, payment_hash: str) -> bool:
-        """Check if an invoice has been paid."""
+        """Check if an invoice has been paid.
+
+        Em mock mode, devolve True (simula pagamento confirmado) — o mock
+        existe pra a demo funcionar sem um nó Lightning real, então fingir
+        "pago" é o comportamento esperado.
+
+        Em runtime real, uma falha de rede/API NÃO pode mascarar como
+        "pago" um pagamento que não sabemos se foi confirmado — isso
+        faria o motor de risco subir tier de uma usuária que talvez nem
+        tenha pago. Retorna False em erro, deixando quem chama decidir
+        (polling de novo, alertar, etc.).
+        """
         if self._mock or not wallet_key:
             return True
         try:
@@ -137,7 +148,7 @@ class LNbitsService:
                 return resp.json().get("paid", False)
         except Exception as e:
             logger.warning("LNbits check_payment failed: %s", e)
-            return True
+            return False
 
     def get_wallet_balance(self, wallet_key: str) -> dict:
         """Consulta o saldo de uma wallet em millisatoshis.
