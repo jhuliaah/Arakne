@@ -3,7 +3,7 @@
 import type { CobrancaPix, ConcluirAulaResponse, CotacaoCarteira, CustodiaReservaFria, DepositarCarteiraResponse, Emprestimo, GerarQuitacaoResponse, IniciarAulaResponse, InscreverTrilhaResponse, LoginResponse, PagarCarteiraResponse, PagamentoResponse, PontoDeTroca, SaldoCarteira, StatusPagamentoPix, TransacaoCarteira, Trilha, TrilhaDetail, Troca, Usuaria } from "./types";
 import { getStoredNpub } from "./lib/pattern-storage";
 
-const API_BASE = "/api";
+const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
 // Conversão demo sats → BRL (1 sat = R$0,0001; 10000 sats = R$1,00).
 // Em produção, buscar cotação via API externa.
