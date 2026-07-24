@@ -524,6 +524,49 @@ Isso sobe backend (:8000) + frontend (:5173), reseta o DB com dados demo
 (FUNDADORA + FORNECEDORA + 9 trilhas/54 aulas/127 materiais) e registra
 a custódia multisig demo.
 
+### Como rodar a demo em modo mock (`--mock`)
+
+Pra demonstrar o fluxo inteiro sem tocar nas credenciais reais (Mercado
+Pago, LNbits, Binance) e sem depender de internet no dia da apresentação:
+
+```bash
+bash scripts/dev-up.sh --mock
+```
+
+O script faz tudo automaticamente:
+
+1. **Salva** seu `.env` real em `.env.real.bak`
+2. **Copia** `.env.mock` para `.env` (todas as credenciais vazias → modo mock)
+3. **Roda o seed** (reseta o DB + cria FUNDADORA + FORNECEDORA + 9 trilhas)
+4. **Sobe** backend (`:8000`) + frontend (`:5173`)
+5. Ao pressionar **Ctrl+C**: mata os servidores e **restaura** o `.env` real
+
+Em modo mock, QR Pix são fake, invoices são simuladas, e **nenhuma chamada
+real** sai pro Mercado Pago, LNbits ou Binance — seu `.env` real fica
+intacto o tempo todo.
+
+**Credenciais demo:**
+
+| Conta       | Identificador | PIN  | Tier |
+|-------------|----------------|------|------|
+| Fundadora   | `FUNDADORA`    | 1234 | 3    |
+| Fornecedora | `FORNECEDORA`  | 1234 | 3    |
+
+**Roteiro da demo:**
+
+1. Abrir `http://localhost:5173/demo-setup` → conectar como FUNDADORA (já preenchido)
+2. Ir à trilha 9 → desenhar o Ponto Arakne → revela a FinancialPage
+3. Abrir `http://localhost:5173/convite/FUNDADORA_INVITE` **num navegador
+   diferente ou numa aba anônima/privada** → cria a convidada (tier 1).
+   > ⚠️ Não abra num aba normal do mesmo navegador: como o app guarda a
+   > sessão/PIN no `localStorage`, uma segunda aba comum do mesmo navegador
+   > compartilha a mesma identidade logada — pra ver as duas usuárias
+   > (FUNDADORA e a convidada) ao mesmo tempo, elas precisam estar em
+   > perfis de navegador isolados (janela anônima, outro navegador, ou
+   > outro perfil).
+4. Na FinancialPage: "Puxar novelos" (empréstimo mock), "Devolver"
+   (repagamento mock), troca de pontos
+
 ### Dados de seed
 
 | Usuária      | Identificador  | PIN  | Tier | Notas                                  |
