@@ -15,7 +15,13 @@
 #                                           # ANTES do backend subir — nunca
 #                                           # mais fica com URL de túnel
 #                                           # morto/desatualizada
+#    bash scripts/dev-up.sh --mock        # DEMO: troca .env por .env.mock
+#                                           # (zero credenciais reais, tudo mock),
+#                                           # roda seed, sobe tudo. Restaura
+#                                           # o .env real ao encerrar (Ctrl+C).
+#                                           # NÃO combina com --tunnel.
 #    bash scripts/dev-up.sh --all          # seed + multisig + tunnel + sobe
+#    bash scripts/dev-up.sh --mock --all   # modo demo completo: mock + seed
 #
 #  Ctrl+C derruba ambos os servadores graciosamente.
 #  Logs: backend.log e frontend.log na pasta do repo.
@@ -31,6 +37,8 @@ BACKEND_LOG="$ROOT/backend.log"
 FRONTEND_LOG="$ROOT/frontend.log"
 TUNNEL_LOG="$ROOT/tunnel.log"
 ENV_FILE="$ROOT/.env"
+ENV_REAL_BACKUP="$ROOT/.env.real.bak"
+ENV_MOCK="$ROOT/.env.mock"
 BACKEND_URL="http://localhost:8000/health"
 FRONTEND_URL="http://localhost:5173"
 
@@ -55,16 +63,28 @@ DO_SEED=false
 DO_SEED_TRILHAS=false
 DO_MULTISIG=false
 DO_TUNNEL=false
+DO_MOCK=false
 for arg in "$@"; do
   case "$arg" in
     --seed)         DO_SEED=true ;;
     --seed-trilhas) DO_SEED_TRILHAS=true ;;
     --multisig)     DO_MULTISIG=true ;;
     --tunnel)       DO_TUNNEL=true ;;
+    --mock)         DO_MOCK=true ;;
     --all)          DO_SEED=true; DO_MULTISIG=true; DO_TUNNEL=true ;;
     *) err "Argumento desconhecido: $arg"; exit 1 ;;
   esac
 done
+
+# --mock implica --seed (demo precisa das contas FUNDADORA/FORNECEDORA)
+if $DO_MOCK; then
+  DO_SEED=true
+  # --mock e --tunnel são mutuamente exclusivos (mock não precisa de webhook)
+  if $DO_TUNNEL; then
+    warn "--mock sobrescreve --tunnel (mock não precisa de túnel)"
+    DO_TUNNEL=false
+  fi
+fi
 
 # ── PIDs a limpar no exit ─────────────────────────────────────
 BACKEND_PID=""
@@ -79,9 +99,32 @@ cleanup() {
   [ -n "$TUNNEL_PID" ]   && kill "$TUNNEL_PID"   2>/dev/null && ok "túnel parado"
   # Mata processos filhos que tenham sobrado (vite/uvicorn/cloudflared)
   pkill -P $$ 2>/dev/null || true
+  # Restaura o .env real se estávamos em modo mock
+  if $DO_MOCK && [ -f "$ENV_REAL_BACKUP" ]; then
+    cp "$ENV_REAL_BACKUP" "$ENV_FILE"
+    rm -f "$ENV_REAL_BACKUP"
+    ok ".env real restaurado"
+  fi
   exit 0
 }
 trap cleanup EXIT INT TERM
+
+# ── 0. Modo demo (mock) — troca .env por .env.mock ────────────
+# Salva o .env real, copia .env.mock por cima. Restaura no cleanup.
+# Assim a demo nunca toca em credenciais reais (LNbits, Pix, Binance).
+if $DO_MOCK; then
+  if [ ! -f "$ENV_MOCK" ]; then
+    err ".env.mock não encontrado em $ENV_MOCK — abortando"
+    exit 1
+  fi
+  log "Modo DEMO (mock) ativado — trocando .env por .env.mock"
+  if [ -f "$ENV_FILE" ]; then
+    cp "$ENV_FILE" "$ENV_REAL_BACKUP"
+    ok ".env real salvo em .env.real.bak"
+  fi
+  cp "$ENV_MOCK" "$ENV_FILE"
+  ok ".env.mock copiado para .env (zero credenciais reais)"
+fi
 
 # ── 1. Venv do backend ─────────────────────────────────────────
 if [ ! -d "$VENV_DIR" ]; then
@@ -240,6 +283,9 @@ echo -e "  Health:    ${C_CYAN}http://localhost:8000/health${C_RESET}"
 if $DO_TUNNEL; then
   echo -e "  Túnel:     ${C_CYAN}${TUNNEL_URL}${C_RESET}"
   echo -e "  Webhook:   ${C_CYAN}${WEBHOOK_URL}${C_RESET}  (já escrito no .env)"
+fi
+if $DO_MOCK; then
+  echo -e "  Modo:      ${C_YELLOW}DEMO (mock)${C_RESET} — zero credenciais reais"
 fi
 echo ""
 echo -e "  Logs:"
