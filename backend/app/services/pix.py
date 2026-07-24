@@ -240,6 +240,52 @@ class MercadoPagoPixService:
             logger.error("Mercado Pago pagar_pix falhou: %s", e)
             raise MercadoPagoPixError(str(e)) from e
 
+    def buscar_pagamento_por_txid(self, txid: str) -> dict | None:
+        """Busca o status de um pagamento no Mercado Pago pelo external_reference.
+
+        Usa GET /v1/payments/search?external_reference={txid} — o mesmo txid
+        que gravamos como external_reference em criar_cobranca/depositar.
+        Permite confirmar depósitos da carteira via polling no frontend,
+        sem depender do webhook (que pode falhar se o túnel cloudflared
+        estiver fora do ar).
+
+        Retorna {mp_payment_id, status, external_reference} ou None se
+        nenhum pagamento for encontrado para o txid. Em mock, sempre retorna
+        "approved" para o txid mapeado.
+        """
+        if self._mock:
+            return self._mock_consulta(self._mock_lookup_id(txid))
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.get(
+                    f"{self.base_url}/v1/payments/search",
+                    params={"external_reference": txid},
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                results = data.get("results") or []
+                if not results:
+                    return None
+                pagamento = results[0]
+                return {
+                    "mp_payment_id": str(pagamento["id"]),
+                    "status": pagamento.get("status", "pending"),
+                    "external_reference": pagamento.get("external_reference"),
+                }
+        except Exception as e:
+            logger.warning("Mercado Pago buscar_pagamento_por_txid falhou: %s", e)
+            raise MercadoPagoPixError(str(e)) from e
+
+    def _mock_lookup_id(self, txid: str) -> str:
+        """Em mock, inverte o mapa _mock_txids pra achar o mp_payment_id
+        que corresponde ao txid dado. Se não houver, devolve string vazia
+        e _mock_consulta retorna external_reference=None (sem match)."""
+        for mp_id, t in self._mock_txids.items():
+            if t == txid:
+                return mp_id
+        return ""
+
     @staticmethod
     def extrair_payment_id_da_notificacao(payload: dict) -> str | None:
         """Extrai o id de pagamento de um payload de webhook do Mercado Pago.

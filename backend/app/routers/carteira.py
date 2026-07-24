@@ -34,9 +34,10 @@ from app.schemas.carteira import (
     PagarResponse,
     SaldoResponse,
     TransacaoCarteiraResponse,
+    VerificarDepositoResponse,
 )
 from app.services.exchange import exchange
-from app.services.pix import pix
+from app.services.pix import MercadoPagoPixError, pix
 
 router = APIRouter(prefix="/carteira", tags=["carteira"])
 
@@ -258,6 +259,69 @@ def pagar(
         status=transacao.status,
         valor_centavos_brl=payload.valor_centavos_brl,
         valor_sats=-valor_sats,
+    )
+
+
+@router.post(
+    "/transacoes/{txid}/verificar",
+    response_model=VerificarDepositoResponse,
+    summary="Verificar status de um depósito consultando o Mercado Pago",
+    description="Polling ativo: consulta o Mercado Pago pelo external_reference "
+    "(txid) e atualiza o status da TransacaoCarteira se o pagamento foi "
+    "confirmado. Fallback pro caso do webhook não chegar (túnel cloudflared "
+    "fora do ar). Só funciona pra transações da usuária autenticada.",
+)
+def verificar_transacao(
+    txid: str,
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    transacao = (
+        db.query(TransacaoCarteira)
+        .filter(
+            TransacaoCarteira.txid == txid,
+            TransacaoCarteira.usuaria_id == current_usuaria.id,
+        )
+        .first()
+    )
+    if not transacao:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Transação não encontrada")
+
+    if transacao.status == "concluida":
+        return VerificarDepositoResponse(
+            txid=txid, status="concluida", status_mp=None
+        )
+
+    try:
+        resultado = pix.buscar_pagamento_por_txid(txid)
+    except MercadoPagoPixError as e:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Falha ao consultar Mercado Pago: {e}",
+        )
+
+    if not resultado:
+        return VerificarDepositoResponse(
+            txid=txid, status=transacao.status, status_mp=None
+        )
+
+    status_mp = resultado.get("status", "")
+    if status_mp == "approved":
+        transacao.status = "concluida"
+        db.commit()
+        return VerificarDepositoResponse(
+            txid=txid, status="concluida", status_mp=status_mp
+        )
+
+    if status_mp in ("rejected", "cancelled"):
+        transacao.status = "falhou"
+        db.commit()
+        return VerificarDepositoResponse(
+            txid=txid, status="falhou", status_mp=status_mp
+        )
+
+    return VerificarDepositoResponse(
+        txid=txid, status=transacao.status, status_mp=status_mp
     )
 
 

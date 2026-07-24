@@ -10,7 +10,12 @@
 #                                           # use isto se já tem uma conta
 #                                           # real com saldo que não quer perder)
 #    bash scripts/dev-up.sh --multisig     # registra custódia multisig antes
-#    bash scripts/dev-up.sh --all          # seed + multisig + sobe
+#    bash scripts/dev-up.sh --tunnel       # sobe cloudflared, atualiza
+#                                           # MP_WEBHOOK_URL no .env sozinho
+#                                           # ANTES do backend subir — nunca
+#                                           # mais fica com URL de túnel
+#                                           # morto/desatualizada
+#    bash scripts/dev-up.sh --all          # seed + multisig + tunnel + sobe
 #
 #  Ctrl+C derruba ambos os servadores graciosamente.
 #  Logs: backend.log e frontend.log na pasta do repo.
@@ -24,6 +29,8 @@ BACKEND_DIR="$ROOT/backend"
 FRONTEND_DIR="$ROOT/frontend"
 BACKEND_LOG="$ROOT/backend.log"
 FRONTEND_LOG="$ROOT/frontend.log"
+TUNNEL_LOG="$ROOT/tunnel.log"
+ENV_FILE="$ROOT/.env"
 BACKEND_URL="http://localhost:8000/health"
 FRONTEND_URL="http://localhost:5173"
 
@@ -47,12 +54,14 @@ err()  { echo -e "${C_RED}[$(date +%H:%M:%S)] ERRO${C_RESET} $*" >&2; }
 DO_SEED=false
 DO_SEED_TRILHAS=false
 DO_MULTISIG=false
+DO_TUNNEL=false
 for arg in "$@"; do
   case "$arg" in
     --seed)         DO_SEED=true ;;
     --seed-trilhas) DO_SEED_TRILHAS=true ;;
     --multisig)     DO_MULTISIG=true ;;
-    --all)          DO_SEED=true; DO_MULTISIG=true ;;
+    --tunnel)       DO_TUNNEL=true ;;
+    --all)          DO_SEED=true; DO_MULTISIG=true; DO_TUNNEL=true ;;
     *) err "Argumento desconhecido: $arg"; exit 1 ;;
   esac
 done
@@ -60,13 +69,15 @@ done
 # ── PIDs a limpar no exit ─────────────────────────────────────
 BACKEND_PID=""
 FRONTEND_PID=""
+TUNNEL_PID=""
 
 cleanup() {
   echo ""
   log "Encerrando servidores..."
   [ -n "$FRONTEND_PID" ] && kill "$FRONTEND_PID" 2>/dev/null && ok "frontend parado"
   [ -n "$BACKEND_PID" ]  && kill "$BACKEND_PID"  2>/dev/null && ok "backend parado"
-  # Mata processos filhos que tenham sobrado (vite/uvicorn workers)
+  [ -n "$TUNNEL_PID" ]   && kill "$TUNNEL_PID"   2>/dev/null && ok "túnel parado"
+  # Mata processos filhos que tenham sobrado (vite/uvicorn/cloudflared)
   pkill -P $$ 2>/dev/null || true
   exit 0
 }
@@ -135,7 +146,45 @@ if $DO_MULTISIG; then
   fi
 fi
 
-# ── 5. Sobe backend ───────────────────────────────────────────
+# ── 5. Túnel cloudflared + MP_WEBHOOK_URL (opcional) ───────────
+# Roda ANTES do backend subir, de propósito: o webhook do Mercado Pago
+# só funciona se MP_WEBHOOK_URL estiver certo no .env quando o backend lê
+# as variáveis na inicialização — editar o .env depois de o processo já
+# estar de pé não tem efeito (já mordeu o time várias vezes hoje).
+if $DO_TUNNEL; then
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    err "cloudflared não encontrado — instale antes de usar --tunnel (ex.: paru -S cloudflared no Arch)"
+    exit 1
+  fi
+  log "Subindo túnel cloudflared..."
+  : > "$TUNNEL_LOG"
+  cloudflared tunnel --url http://localhost:8000 > "$TUNNEL_LOG" 2>&1 &
+  TUNNEL_PID=$!
+
+  TUNNEL_URL=""
+  for i in $(seq 1 30); do
+    TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
+    [ -n "$TUNNEL_URL" ] && break
+    if [ "$i" -eq 30 ]; then
+      err "túnel não gerou URL em 30s — veja $TUNNEL_LOG"
+      tail -20 "$TUNNEL_LOG" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  ok "túnel de pé: $TUNNEL_URL"
+
+  WEBHOOK_URL="${TUNNEL_URL}/pix/webhook"
+  touch "$ENV_FILE"
+  if grep -q '^MP_WEBHOOK_URL=' "$ENV_FILE"; then
+    sed -i "s#^MP_WEBHOOK_URL=.*#MP_WEBHOOK_URL=${WEBHOOK_URL}#" "$ENV_FILE"
+  else
+    echo "MP_WEBHOOK_URL=${WEBHOOK_URL}" >> "$ENV_FILE"
+  fi
+  ok "MP_WEBHOOK_URL atualizado no .env: $WEBHOOK_URL"
+fi
+
+# ── 6. Sobe backend ───────────────────────────────────────────
 log "Subindo backend (uvicorn :8000)..."
 # --reload-exclude "*.db" evita reload a cada escrita no arakne.db
 # Usa uvicorn do venv (ativado acima)
@@ -145,12 +194,12 @@ log "Subindo backend (uvicorn :8000)..."
 ) > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 
-# ── 5. Sobe frontend ──────────────────────────────────────────
+# ── 7. Sobe frontend ──────────────────────────────────────────
 log "Subindo frontend (vite :5173)..."
 ( cd "$FRONTEND_DIR" && npm run dev -- --host ) > "$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
 
-# ── 6. Aguarda saúde ──────────────────────────────────────────
+# ── 8. Aguarda saúde ──────────────────────────────────────────
 log "Aguardando backend responder..."
 for i in $(seq 1 30); do
   if curl -sf "$BACKEND_URL" > /dev/null 2>&1; then
@@ -179,7 +228,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# ── 7. Resumo ─────────────────────────────────────────────────
+# ── 9. Resumo ─────────────────────────────────────────────────
 echo ""
 echo -e "${C_GREEN}══════════════════════════════════════════════════════════════${C_RESET}"
 echo -e "${C_GREEN} Arakne no ar${C_RESET}"
@@ -188,10 +237,17 @@ echo ""
 echo -e "  Frontend:  ${C_CYAN}http://localhost:5173${C_RESET}"
 echo -e "  Backend:   ${C_CYAN}http://localhost:8000/docs${C_RESET}  (Swagger)"
 echo -e "  Health:    ${C_CYAN}http://localhost:8000/health${C_RESET}"
+if $DO_TUNNEL; then
+  echo -e "  Túnel:     ${C_CYAN}${TUNNEL_URL}${C_RESET}"
+  echo -e "  Webhook:   ${C_CYAN}${WEBHOOK_URL}${C_RESET}  (já escrito no .env)"
+fi
 echo ""
 echo -e "  Logs:"
 echo -e "    backend:  $BACKEND_LOG"
 echo -e "    frontend: $FRONTEND_LOG"
+if $DO_TUNNEL; then
+  echo -e "    túnel:    $TUNNEL_LOG"
+fi
 echo ""
 echo -e "  Credenciais demo:"
 echo -e "    FUNDADORA:   identificador ${C_YELLOW}FUNDADORA${C_RESET}  PIN ${C_YELLOW}1234${C_RESET}"
@@ -201,5 +257,5 @@ echo ""
 echo -e "  ${C_YELLOW}Ctrl+C${C_RESET} para encerrar ambos os servidores."
 echo ""
 
-# ── 8. Mantém o script vivo (espera os processos) ─────────────
+# ── 10. Mantém o script vivo (espera os processos) ─────────────
 wait

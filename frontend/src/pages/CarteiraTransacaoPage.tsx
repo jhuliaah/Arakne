@@ -36,8 +36,8 @@ import {
   depositarCarteira,
   pagarCarteira,
   gerarQuitacaoCarteira,
+  verificarDepositoCarteira,
   getStatusPagamentoPix,
-  getTransacoesCarteira,
   SATS_TO_BRL,
 } from "../api";
 import type { DepositarCarteiraResponse, GerarQuitacaoResponse, Usuaria } from "../types";
@@ -449,23 +449,21 @@ export default function CarteiraTransacaoPage({
    *  "quitar" (repagar empréstimo) usa /pix/pagamentos/{txid} — cria um
    *  PagamentoPix de verdade, o mesmo fluxo já testado ponta-a-ponta.
    *
-   *  "receber" (depósito na carteira) NÃO cria PagamentoPix (ver
-   *  routers/carteira.py — essa tabela é só pra repagamento de
-   *  empréstimo); consulta /carteira/transacoes e casa pelo txid, que é
-   *  onde o webhook do Pix agora também sabe confirmar essa transação. */
+   *  "receber" (depósito na carteira) chama POST /carteira/transacoes/{txid}
+   *  /verificar — consulta o Mercado Pago diretamente e atualiza o status
+   *  da TransacaoCarteira se o pagamento foi confirmado. Não depende do
+   *  webhook, que pode falhar se o túnel cloudflared estiver fora do ar. */
   function iniciarPolling(txid: string) {
     stopPolling();
     pollingRef.current = window.setInterval(async () => {
       if (modo === "receber") {
-        const transacoes = await getTransacoesCarteira();
-        if (!transacoes) return; // erro de rede → mantém polling
-        const transacao = transacoes.find((t) => t.txid === txid);
-        if (!transacao) return; // ainda não apareceu no extrato
-        if (transacao.status === "concluida") {
+        const verificacao = await verificarDepositoCarteira(txid);
+        if (!verificacao) return; // erro de rede → mantém polling
+        if (verificacao.status === "concluida") {
           stopPolling();
           onTransacaoConcluida();
           setTimeout(() => onBack(), 2000);
-        } else if (transacao.status === "falhou") {
+        } else if (verificacao.status === "falhou") {
           stopPolling();
           setErro("O depósito falhou. Tente gerar um novo código.");
           setEtapa("erro");

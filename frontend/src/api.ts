@@ -995,3 +995,25 @@ export async function gerarQuitacaoCarteira(
     return null;
   }
 }
+
+/** Verifica o status de um depósito consultando o Mercado Pago diretamente
+ *  (POST /carteira/transacoes/{txid}/verificar). Polling ativo — não depende
+ *  do webhook do Mercado Pago, que pode falhar se o túnel cloudflared estiver
+ *  fora do ar. Atualiza o status no backend se o pagamento foi confirmado.
+ *  Retorna {txid, status, status_mp} ou null em erro de rede. */
+export async function verificarDepositoCarteira(
+  txid: string
+): Promise<{ txid: string; status: string; status_mp: string | null } | null> {
+  try {
+    const token = await ensureToken();
+    if (!token) return null;
+    const resp = await fetch(
+      `${API_BASE}/carteira/transacoes/${encodeURIComponent(txid)}/verificar`,
+      { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}

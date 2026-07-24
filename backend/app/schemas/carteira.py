@@ -113,8 +113,8 @@ class GerarQuitacaoRequest(BaseModel):
 
 class GerarQuitacaoResponse(BaseModel):
     """Cobrança Pix gerada pra quitação — mesma estrutura do endpoint
-    /pix/emprestimos/{id}/cobranca, mas exposta no /carteira pra o
-    frontend ter tudo num lugar só."""
+    /pix/emprestimos/{id}/cobranca, mas exposta no /carteira pra o frontend
+    ter tudo num lugar só."""
 
     txid: str
     qr_code: str
@@ -123,3 +123,18 @@ class GerarQuitacaoResponse(BaseModel):
     valor_sats: int
     valor_centavos_brl: int
     status: str = "pendente"
+
+
+# ── Verificação de depósito (polling sem webhook) ──────────
+
+class VerificarDepositoResponse(BaseModel):
+    """Resultado da verificação de status de uma transação de carteira
+    consultando o Mercado Pago diretamente. Permite ao frontend confirmar
+    depósitos via polling, sem depender do webhook (que pode falhar se o
+    túnel cloudflared estiver fora do ar)."""
+
+    txid: str
+    status: str = Field(..., description="Status atual: pendente | concluida | falhou")
+    status_mp: str | None = Field(
+        None, description="Status retornado pelo Mercado Pago (approved, pending, etc.)"
+    )
