@@ -35,7 +35,7 @@ from app.schemas.carteira import (
     TransacaoCarteiraResponse,
 )
 from app.services.exchange import exchange
-from app.services.lnbits import lnbits
+from app.services.coinos import coinos as lnbits
 from app.services.pix import pix
 
 router = APIRouter(prefix="/carteira", tags=["carteira"])
@@ -160,6 +160,7 @@ def depositar(
 
     transacao = TransacaoCarteira(
         usuaria_id=current_usuaria.id,
+        txid=txid,
         tipo="deposito",
         valor_sats=valor_sats,
         valor_centavos_brl=payload.valor_centavos_brl,

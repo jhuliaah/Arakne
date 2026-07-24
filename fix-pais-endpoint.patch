@@ -1,0 +1,65 @@
+diff --git a/backend/app/routers/usuarias.py b/backend/app/routers/usuarias.py
+index 46459b5..32acf17 100644
+--- a/backend/app/routers/usuarias.py
++++ b/backend/app/routers/usuarias.py
+@@ -38,6 +38,7 @@ from app.schemas.usuaria import (
+     ApelidoUpdate,
+     ConviteResponse,
+     NpubUpdate,
++    PaisUpdate,
+     UsuariaCreate,
+     UsuariaResponse,
+ )
+@@ -272,6 +273,25 @@ def update_apelido(
+     return current_usuaria
+ 
+ 
++@router.patch(
++    "/me/pais",
++    response_model=UsuariaResponse,
++    summary="Atualizar país da usuária logada",
++    description="Atualiza o país (ISO 3166-1 alpha-2) da usuária autenticada. "
++    "Usado pra liberar pagamentos Pix na carteira (routers/carteira.py) — "
++    "só faz sentido pra quem está no Brasil.",
++)
++def update_pais(
++    payload: PaisUpdate,
++    current_usuaria: Usuaria = Depends(get_current_usuaria),
++    db: Session = Depends(get_db),
++):
++    current_usuaria.pais = payload.pais
++    db.commit()
++    db.refresh(current_usuaria)
++    return current_usuaria
++
++
+ @router.get(
+     "/me/convite",
+     response_model=ConviteResponse,
+diff --git a/backend/app/schemas/usuaria.py b/backend/app/schemas/usuaria.py
+index d4bbdb8..a10a179 100644
+--- a/backend/app/schemas/usuaria.py
++++ b/backend/app/schemas/usuaria.py
+@@ -96,6 +96,22 @@ class ApelidoUpdate(BaseModel):
+         return v
+ 
+ 
++class PaisUpdate(BaseModel):
++    """Request body for PATCH /usuarias/me/pais — atualiza o país.
++
++    Usado pra liberar pagamentos Pix na carteira (routers/carteira.py),
++    que só fazem sentido pra quem está no Brasil.
++    """
++
++    pais: str = Field(
++        ...,
++        min_length=2,
++        max_length=2,
++        pattern=r"^[A-Z]{2}$",
++        description='Código de país ISO 3166-1 alpha-2 (ex: "BR").',
++    )
++
++
+ class ConviteResponse(BaseModel):
+     """Response for GET /usuarias/me/convite — invite link data."""
+ 

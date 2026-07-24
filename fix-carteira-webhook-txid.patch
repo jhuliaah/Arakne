@@ -1,0 +1,228 @@
+diff --git a/backend/app/models/transacao_carteira.py b/backend/app/models/transacao_carteira.py
+index e87fd6b..1d806bb 100644
+--- a/backend/app/models/transacao_carteira.py
++++ b/backend/app/models/transacao_carteira.py
+@@ -24,6 +24,14 @@ class TransacaoCarteira(Base):
+     id = Column(Integer, primary_key=True, index=True)
+     usuaria_id = Column(Integer, ForeignKey("usuarias.id"), nullable=False)
+ 
++    # Liga essa linha à cobrança Pix que a originou (quando aplicável, ex.:
++    # depósito) — é isso que o webhook do Pix usa pra achar e confirmar
++    # essa transação quando não existe um PagamentoPix correspondente
++    # (PagamentoPix é só pra repagamento de empréstimo, ver docstring do
++    # módulo). Nulo pra transações sem cobrança Pix própria (ex.: conversão
++    # interna, saque).
++    txid = Column(String, nullable=True, index=True)
++
+     # "deposito" | "pagamento" | "conversao" | "saque"
+     tipo = Column(String, nullable=False)
+     # Positivo para entrada, negativo para saída — facilita sum(saldo).
+diff --git a/backend/app/routers/carteira.py b/backend/app/routers/carteira.py
+index 4756d77..026ee56 100644
+--- a/backend/app/routers/carteira.py
++++ b/backend/app/routers/carteira.py
+@@ -160,6 +160,7 @@ def depositar(
+ 
+     transacao = TransacaoCarteira(
+         usuaria_id=current_usuaria.id,
++        txid=txid,
+         tipo="deposito",
+         valor_sats=valor_sats,
+         valor_centavos_brl=payload.valor_centavos_brl,
+diff --git a/backend/app/routers/pix.py b/backend/app/routers/pix.py
+index 6c44878..98cd459 100644
+--- a/backend/app/routers/pix.py
++++ b/backend/app/routers/pix.py
+@@ -23,6 +23,7 @@ from app.database import get_db
+ from app.models.conversao_pool import ConversaoPool
+ from app.models.emprestimo import Emprestimo
+ from app.models.pagamento_pix import PagamentoPix
++from app.models.transacao_carteira import TransacaoCarteira
+ from app.schemas.pix import (
+     CobrancaPixRequest,
+     CobrancaPixResponse,
+@@ -236,9 +237,30 @@ async def webhook_pix(request: Request, db: Session = Depends(get_db)):
+     pagamento = (
+         db.query(PagamentoPix).filter(PagamentoPix.mp_payment_id == mp_payment_id).first()
+     )
+-    if not pagamento:
+-        logger.warning("Webhook Pix: mp_payment_id %s sem cobrança correspondente", mp_payment_id)
++    if pagamento:
++        _confirmar_pagamento(pagamento, db)
++        return WebhookPixResponse(ok=True)
++
++    # Não é repagamento de empréstimo — pode ser um depósito de carteira
++    # (routers/carteira.py::depositar), que não cria PagamentoPix (essa
++    # tabela é só pra repagamento). Casa pelo txid (external_reference)
++    # em vez de mp_payment_id, já que é isso que a carteira guarda.
++    txid = detalhe.get("external_reference")
++    transacao = (
++        db.query(TransacaoCarteira).filter(TransacaoCarteira.txid == txid).first()
++        if txid
++        else None
++    )
++    if transacao and transacao.status == "pendente":
++        transacao.status = "concluida"
++        db.commit()
++        # Nota: isso só confirma a linha do extrato. Creditar sats de
++        # verdade na wallet LNbits da usuária (a partir do BRL recebido)
++        # é uma etapa separada, ainda não implementada aqui — mesmo
++        # descompasso já registrado no doc mestre (carteira individual
++        # ainda não tem fluxo de crédito real conectado).
+         return WebhookPixResponse(ok=True)
+ 
+-    _confirmar_pagamento(pagamento, db)
++    if not transacao:
++        logger.warning("Webhook Pix: mp_payment_id %s sem cobrança correspondente", mp_payment_id)
+     return WebhookPixResponse(ok=True)
+diff --git a/backend/app/schemas/carteira.py b/backend/app/schemas/carteira.py
+index 7d98a21..91c0504 100644
+--- a/backend/app/schemas/carteira.py
++++ b/backend/app/schemas/carteira.py
+@@ -34,6 +34,7 @@ class TransacaoCarteiraResponse(BaseModel):
+     model_config = ConfigDict(from_attributes=True)
+ 
+     id: int
++    txid: Optional[str] = None
+     tipo: str = Field(..., description="deposito | pagamento | conversao | saque")
+     valor_sats: int = Field(..., description="Positivo pra entrada, negativo pra saída")
+     valor_centavos_brl: Optional[int] = None
+diff --git a/backend/app/services/pix.py b/backend/app/services/pix.py
+index fc160d2..5ee76b0 100644
+--- a/backend/app/services/pix.py
++++ b/backend/app/services/pix.py
+@@ -44,6 +44,11 @@ class MercadoPagoPixService:
+         self.base_url = base_url.rstrip("/")
+         self._mock = not bool(access_token)
+         self._is_test_credential = access_token.startswith("TEST-")
++        # Mapa mp_payment_id -> txid, só usado em modo mock: permite que
++        # consultar_pagamento() devolva o external_reference certo depois,
++        # como o Mercado Pago real faria — sem isso, uma segunda chamada
++        # mock não teria como saber qual txid corresponde a qual pagamento.
++        self._mock_txids: dict[str, str] = {}
+ 
+     @property
+     def is_mock(self) -> bool:
+@@ -60,10 +65,11 @@ class MercadoPagoPixService:
+ 
+     # ── Mock helpers ─────────────────────────────────────────────
+ 
+-    @staticmethod
+-    def _mock_cobranca(valor_brl: float, txid: str) -> dict:
++    def _mock_cobranca(self, valor_brl: float, txid: str) -> dict:
++        mp_payment_id = "mock_" + secrets.token_hex(8)
++        self._mock_txids[mp_payment_id] = txid
+         return {
+-            "mp_payment_id": "mock_" + secrets.token_hex(8),
++            "mp_payment_id": mp_payment_id,
+             "txid": txid,
+             "status": "pending",
+             "qr_code": f"00020126mockpix{txid}52040000530398654{valor_brl:.2f}5802BR6009MOCKCITY",
+@@ -71,12 +77,11 @@ class MercadoPagoPixService:
+             "ticket_url": f"https://mock.mercadopago.local/pix/{txid}",
+         }
+ 
+-    @staticmethod
+-    def _mock_consulta(mp_payment_id: str) -> dict:
++    def _mock_consulta(self, mp_payment_id: str) -> dict:
+         return {
+             "mp_payment_id": mp_payment_id,
+             "status": "approved",
+-            "external_reference": None,
++            "external_reference": self._mock_txids.get(mp_payment_id),
+         }
+ 
+     @staticmethod
+diff --git a/backend/app/tests/test_carteira.py b/backend/app/tests/test_carteira.py
+index 49873b6..0f6e1c0 100644
+--- a/backend/app/tests/test_carteira.py
++++ b/backend/app/tests/test_carteira.py
+@@ -130,6 +130,39 @@ def test_post_depositar_sem_token_retorna_401(client, db_session):
+     assert resp.status_code == 401
+ 
+ 
++def test_webhook_confirma_deposito_de_carteira_via_txid(client, db_session):
++    """O webhook do /pix precisa saber confirmar um depósito de carteira
++    mesmo sem PagamentoPix (essa tabela é só pra repagamento de
++    empréstimo) — casa pelo txid (external_reference) em vez de
++    mp_payment_id, e credita a TransacaoCarteira correspondente."""
++    assert pix.is_mock
++    _, _, headers = _criar_usuaria_logada(client)
++
++    resp = client.post(
++        "/carteira/depositar",
++        json={"valor_centavos_brl": 15000},
++        headers=headers,
++    )
++    txid = resp.json()["txid"]
++    assert txid.startswith("arakne-cart-")
++
++    # DepositarResponse não expõe mp_payment_id (só txid) — pega do mapa
++    # interno do mock, que agora lembra qual mp_payment_id corresponde a
++    # qual txid (mesmo comportamento que o Mercado Pago real teria).
++    mp_payment_id = next(k for k, v in pix._mock_txids.items() if v == txid)
++
++    webhook_resp = client.post(
++        "/pix/webhook",
++        json={"type": "payment", "data": {"id": mp_payment_id}},
++    )
++    assert webhook_resp.status_code == 200
++
++    transacoes = client.get("/carteira/transacoes", headers=headers).json()
++    assert len(transacoes) == 1
++    assert transacoes[0]["txid"] == txid
++    assert transacoes[0]["status"] == "concluida"
++
++
+ def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
+     assert pix.is_mock
+     assert exchange.is_mock
+diff --git a/frontend/src/pages/CarteiraTransacaoPage.tsx b/frontend/src/pages/CarteiraTransacaoPage.tsx
+index 625624a..b93b41e 100644
+--- a/frontend/src/pages/CarteiraTransacaoPage.tsx
++++ b/frontend/src/pages/CarteiraTransacaoPage.tsx
+@@ -37,6 +37,7 @@ import {
+   pagarCarteira,
+   gerarQuitacaoCarteira,
+   getStatusPagamentoPix,
++  getTransacoesCarteira,
+   SATS_TO_BRL,
+ } from "../api";
+ import type { DepositarCarteiraResponse, GerarQuitacaoResponse, Usuaria } from "../types";
+@@ -443,10 +444,35 @@ export default function CarteiraTransacaoPage({
+     }
+   }
+ 
+-  /** Inicia polling de status a cada 3s (modos receber/quitar). */
++  /** Inicia polling de status a cada 3s (modos receber/quitar).
++   *
++   *  "quitar" (repagar empréstimo) usa /pix/pagamentos/{txid} — cria um
++   *  PagamentoPix de verdade, o mesmo fluxo já testado ponta-a-ponta.
++   *
++   *  "receber" (depósito na carteira) NÃO cria PagamentoPix (ver
++   *  routers/carteira.py — essa tabela é só pra repagamento de
++   *  empréstimo); consulta /carteira/transacoes e casa pelo txid, que é
++   *  onde o webhook do Pix agora também sabe confirmar essa transação. */
+   function iniciarPolling(txid: string) {
+     stopPolling();
+     pollingRef.current = window.setInterval(async () => {
++      if (modo === "receber") {
++        const transacoes = await getTransacoesCarteira();
++        if (!transacoes) return; // erro de rede → mantém polling
++        const transacao = transacoes.find((t) => t.txid === txid);
++        if (!transacao) return; // ainda não apareceu no extrato
++        if (transacao.status === "concluida") {
++          stopPolling();
++          onTransacaoConcluida();
++          setTimeout(() => onBack(), 2000);
++        } else if (transacao.status === "falhou") {
++          stopPolling();
++          setErro("O depósito falhou. Tente gerar um novo código.");
++          setEtapa("erro");
++        }
++        return;
++      }
++
+       const status = await getStatusPagamentoPix(txid);
+       if (!status) return; // erro de rede → mantém polling
+       if (status.status === "aprovado") {

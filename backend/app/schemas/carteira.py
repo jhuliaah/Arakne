@@ -34,6 +34,7 @@ class TransacaoCarteiraResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    txid: Optional[str] = None
     tipo: str = Field(..., description="deposito | pagamento | conversao | saque")
     valor_sats: int = Field(..., description="Positivo pra entrada, negativo pra saída")
     valor_centavos_brl: Optional[int] = None

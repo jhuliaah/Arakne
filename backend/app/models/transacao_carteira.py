@@ -24,6 +24,14 @@ class TransacaoCarteira(Base):
     id = Column(Integer, primary_key=True, index=True)
     usuaria_id = Column(Integer, ForeignKey("usuarias.id"), nullable=False)
 
+    # Liga essa linha à cobrança Pix que a originou (quando aplicável, ex.:
+    # depósito) — é isso que o webhook do Pix usa pra achar e confirmar
+    # essa transação quando não existe um PagamentoPix correspondente
+    # (PagamentoPix é só pra repagamento de empréstimo, ver docstring do
+    # módulo). Nulo pra transações sem cobrança Pix própria (ex.: conversão
+    # interna, saque).
+    txid = Column(String, nullable=True, index=True)
+
     # "deposito" | "pagamento" | "conversao" | "saque"
     tipo = Column(String, nullable=False)
     # Positivo para entrada, negativo para saída — facilita sum(saldo).

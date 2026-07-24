@@ -38,11 +38,12 @@ from app.schemas.usuaria import (
     ApelidoUpdate,
     ConviteResponse,
     NpubUpdate,
+    PaisUpdate,
     UsuariaCreate,
     UsuariaResponse,
 )
 from app.services.bech32 import to_npub
-from app.services.lnbits import lnbits
+from app.services.coinos import coinos as lnbits
 from app.services.risco import ao_receber_aval, pode_avalizar
 
 router = APIRouter(prefix="/usuarias", tags=["usuarias"])
@@ -267,6 +268,25 @@ def update_apelido(
     db: Session = Depends(get_db),
 ):
     current_usuaria.apelido = payload.apelido
+    db.commit()
+    db.refresh(current_usuaria)
+    return current_usuaria
+
+
+@router.patch(
+    "/me/pais",
+    response_model=UsuariaResponse,
+    summary="Atualizar país da usuária logada",
+    description="Atualiza o país (ISO 3166-1 alpha-2) da usuária autenticada. "
+    "Usado pra liberar pagamentos Pix na carteira (routers/carteira.py) — "
+    "só faz sentido pra quem está no Brasil.",
+)
+def update_pais(
+    payload: PaisUpdate,
+    current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
+):
+    current_usuaria.pais = payload.pais
     db.commit()
     db.refresh(current_usuaria)
     return current_usuaria

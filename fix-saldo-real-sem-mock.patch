@@ -1,0 +1,262 @@
+diff --git a/backend/app/routers/carteira.py b/backend/app/routers/carteira.py
+index 4756d77..eb92759 100644
+--- a/backend/app/routers/carteira.py
++++ b/backend/app/routers/carteira.py
+@@ -15,6 +15,7 @@ import secrets
+ from datetime import UTC, datetime
+ 
+ from fastapi import APIRouter, Depends, HTTPException, status
++from sqlalchemy import func
+ from sqlalchemy.orm import Session
+ 
+ from app.auth import _naive_utc, get_current_usuaria
+@@ -35,15 +36,10 @@ from app.schemas.carteira import (
+     TransacaoCarteiraResponse,
+ )
+ from app.services.exchange import exchange
+-from app.services.lnbits import lnbits
+ from app.services.pix import pix
+ 
+ router = APIRouter(prefix="/carteira", tags=["carteira"])
+ 
+-# Saldo mock de demo (em sats) — usado quando a usuária não tem wallet LNbits
+-# configurada (ex.: conta criada antes do campo lnbits_wallet_key existir).
+-_SALDO_MOCK_SATS = 50_000
+-
+ 
+ def _gerar_txid_carteira(usuaria_id: int) -> str:
+     """txid único pra cobranças Pix da carteira — mesmo padrão do router
+@@ -51,14 +47,33 @@ def _gerar_txid_carteira(usuaria_id: int) -> str:
+     return f"arakne-cart-{usuaria_id}-{secrets.token_hex(6)}"
+ 
+ 
+-def _saldo_sats_da_usuaria(usuaria: Usuaria) -> int:
+-    """Consulta o saldo da usuária em sats via LNbits. Se ela não tem
+-    wallet key (ou LNbits está em mock), devolve o saldo de demo."""
+-    if not usuaria.lnbits_wallet_key:
+-        return _SALDO_MOCK_SATS
+-    balance = lnbits.get_wallet_balance(usuaria.lnbits_wallet_key)
+-    # LNbits devolve millisatoshis; converte pra sats.
+-    return balance.get("balance_msats", 0) // 1000
++def _saldo_sats_da_usuaria(db: Session, usuaria: Usuaria) -> int:
++    """Saldo real da carteira = soma do histórico de transações
++    confirmadas (TransacaoCarteira) — não é mais consulta ao LNbits.
++
++    Por quê a mudança: a wallet LNbits individual por usuária não é real
++    ainda (create_wallet falha — 401 no provedor hospedado; isso é escopo
++    do Breez SDK, seção 22 do doc mestre, não implementado ainda).
++    Consultar `lnbits.get_wallet_balance()` contra uma chave que nunca foi
++    registrada de verdade dava 404, e o fallback de saldo fixo (50.000
++    sats fake) escondia esse problema em vez de mostrar o saldo real.
++
++    O ledger (TransacaoCarteira) já é a fonte de verdade correta: cada
++    linha tem `valor_sats` com sinal (positivo = entrada, negativo =
++    saída, ver docstring do model) e já é atualizado certinho pelo
++    webhook do Pix (routers/pix.py::webhook_pix) a cada depósito real
++    confirmado. Somar isso é mais simples E mais correto do que fingir
++    uma wallet Lightning individual que ainda não existe.
++    """
++    total = (
++        db.query(func.coalesce(func.sum(TransacaoCarteira.valor_sats), 0))
++        .filter(
++            TransacaoCarteira.usuaria_id == usuaria.id,
++            TransacaoCarteira.status == "concluida",
++        )
++        .scalar()
++    )
++    return int(total or 0)
+ 
+ 
+ @router.get(
+@@ -82,16 +97,17 @@ def get_cotacao(
+     "/saldo",
+     response_model=SaldoResponse,
+     summary="Saldo da carteira (sats + BRL)",
+-    description="Retorna o saldo da carteira da usuária em sats (consultado "
+-    "no LNbits) e convertido pra BRL pela cotação atual. Em mock mode, "
+-    "devolve um saldo de demo fixo.",
++    description="Retorna o saldo real da carteira da usuária em sats "
++    "(soma do histórico de transações confirmadas) e convertido pra BRL "
++    "pela cotação atual.",
+ )
+ def get_saldo(
+     current_usuaria: Usuaria = Depends(get_current_usuaria),
++    db: Session = Depends(get_db),
+ ):
+     cotacao = exchange.cotacao_btc_brl()
+     preco_brl = float(cotacao["price"])
+-    saldo_sats = _saldo_sats_da_usuaria(current_usuaria)
++    saldo_sats = _saldo_sats_da_usuaria(db, current_usuaria)
+     saldo_brl = saldo_sats / 100_000_000 * preco_brl
+     return SaldoResponse(
+         saldo_sats=saldo_sats,
+@@ -160,6 +176,7 @@ def depositar(
+ 
+     transacao = TransacaoCarteira(
+         usuaria_id=current_usuaria.id,
++        txid=txid,
+         tipo="deposito",
+         valor_sats=valor_sats,
+         valor_centavos_brl=payload.valor_centavos_brl,
+@@ -209,7 +226,7 @@ def pagar(
+         (payload.valor_centavos_brl / 100) / preco_brl * 100_000_000
+     )
+ 
+-    saldo_sats = _saldo_sats_da_usuaria(current_usuaria)
++    saldo_sats = _saldo_sats_da_usuaria(db, current_usuaria)
+     if valor_sats > saldo_sats:
+         raise HTTPException(
+             status.HTTP_400_BAD_REQUEST,
+diff --git a/backend/app/tests/test_carteira.py b/backend/app/tests/test_carteira.py
+index 49873b6..71c2cb3 100644
+--- a/backend/app/tests/test_carteira.py
++++ b/backend/app/tests/test_carteira.py
+@@ -45,6 +45,31 @@ def _criar_usuaria_logada(client, pin="1234", pais=None):
+     return u, token, {"Authorization": f"Bearer {token}"}
+ 
+ 
++def _depositar_confirmado(client, headers, valor_centavos_brl):
++    """Deposita e confirma via webhook (fluxo real) — devolve o valor_sats
++    creditado. Usado por qualquer teste que precise de saldo real na
++    carteira, já que o saldo agora vem do ledger (TransacaoCarteira com
++    status='concluida'), não de um mock fixo — ver _saldo_sats_da_usuaria."""
++    resp = client.post(
++        "/carteira/depositar",
++        json={"valor_centavos_brl": valor_centavos_brl},
++        headers=headers,
++    )
++    assert resp.status_code == 201, resp.text
++    txid = resp.json()["txid"]
++
++    mp_payment_id = next(k for k, v in pix._mock_txids.items() if v == txid)
++    webhook_resp = client.post(
++        "/pix/webhook", json={"type": "payment", "data": {"id": mp_payment_id}}
++    )
++    assert webhook_resp.status_code == 200
++
++    transacoes = client.get("/carteira/transacoes", headers=headers).json()
++    creditada = next(t for t in transacoes if t["txid"] == txid)
++    assert creditada["status"] == "concluida"
++    return creditada["valor_sats"]
++
++
+ def _dar_aval(client, avalista_codigo, nova_ident):
+     resp = client.post("/avais", json={
+         "avalista_codigo_indicacao": avalista_codigo,
+@@ -84,17 +109,23 @@ def test_get_cotacao_sem_token_retorna_401(client, db_session):
+ 
+ 
+ def test_get_saldo_retorna_sats_e_brl_convertido(client, db_session):
+-    assert lnbits.is_mock
+-    _, _, headers = _criar_usuaria_logada(client)
++    """Saldo vem do ledger (TransacaoCarteira concluída) — não de um valor
++    mock fixo. Sem nenhum depósito confirmado, começa em zero; depois de
++    um depósito confirmado via webhook, reflete o valor real creditado."""
++    _, _, headers = _criar_usuaria_logada(client, pais="BR")
++
++    resp = client.get("/carteira/saldo", headers=headers)
++    assert resp.status_code == 200, resp.text
++    assert resp.json()["saldo_sats"] == 0
++
++    valor_sats_creditado = _depositar_confirmado(client, headers, 15000)
+ 
+     resp = client.get("/carteira/saldo", headers=headers)
+     assert resp.status_code == 200, resp.text
+     data = resp.json()
+-    # Em mock, saldo é 50.000 sats (definido em _SALDO_MOCK_SATS).
+-    assert data["saldo_sats"] == 50_000
++    assert data["saldo_sats"] == valor_sats_creditado
+     assert data["cotacao_btc_brl"] > 0
+-    # saldo_brl = saldo_sats / 100_000_000 * cotacao
+-    esperado_brl = 50_000 / 100_000_000 * data["cotacao_btc_brl"]
++    esperado_brl = valor_sats_creditado / 100_000_000 * data["cotacao_btc_brl"]
+     assert abs(data["saldo_brl"] - round(esperado_brl, 2)) < 0.01
+ 
+ 
+@@ -130,11 +161,48 @@ def test_post_depositar_sem_token_retorna_401(client, db_session):
+     assert resp.status_code == 401
+ 
+ 
++def test_webhook_confirma_deposito_de_carteira_via_txid(client, db_session):
++    """O webhook do /pix precisa saber confirmar um depósito de carteira
++    mesmo sem PagamentoPix (essa tabela é só pra repagamento de
++    empréstimo) — casa pelo txid (external_reference) em vez de
++    mp_payment_id, e credita a TransacaoCarteira correspondente."""
++    assert pix.is_mock
++    _, _, headers = _criar_usuaria_logada(client)
++
++    resp = client.post(
++        "/carteira/depositar",
++        json={"valor_centavos_brl": 15000},
++        headers=headers,
++    )
++    txid = resp.json()["txid"]
++    assert txid.startswith("arakne-cart-")
++
++    # DepositarResponse não expõe mp_payment_id (só txid) — pega do mapa
++    # interno do mock, que agora lembra qual mp_payment_id corresponde a
++    # qual txid (mesmo comportamento que o Mercado Pago real teria).
++    mp_payment_id = next(k for k, v in pix._mock_txids.items() if v == txid)
++
++    webhook_resp = client.post(
++        "/pix/webhook",
++        json={"type": "payment", "data": {"id": mp_payment_id}},
++    )
++    assert webhook_resp.status_code == 200
++
++    transacoes = client.get("/carteira/transacoes", headers=headers).json()
++    assert len(transacoes) == 1
++    assert transacoes[0]["txid"] == txid
++    assert transacoes[0]["status"] == "concluida"
++
++
+ def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
+     assert pix.is_mock
+     assert exchange.is_mock
+     _, _, headers = _criar_usuaria_logada(client, pais="BR")
+ 
++    # Precisa de saldo real (confirmado) antes de conseguir pagar — não
++    # existe mais saldo fake de demo.
++    _depositar_confirmado(client, headers, 50000)  # R$ 500,00
++
+     resp = client.post(
+         "/carteira/pagar",
+         json={
+@@ -150,14 +218,15 @@ def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
+     assert data["valor_centavos_brl"] == 5000
+     assert data["valor_sats"] < 0  # saída: negativo
+ 
+-    # TransacaoCarteira tipo=pagamento registrada como concluída.
++    # TransacaoCarteira tipo=pagamento registrada como concluída, além do
++    # depósito que já estava lá.
+     transacoes = client.get("/carteira/transacoes", headers=headers).json()
+-    assert len(transacoes) == 1
+-    assert transacoes[0]["tipo"] == "pagamento"
+-    assert transacoes[0]["valor_sats"] < 0
+-    assert transacoes[0]["contraparte"] == "12345678901"
+-    assert transacoes[0]["status"] == "concluida"
+-    assert transacoes[0]["descricao"] == "material adquirido"
++    assert len(transacoes) == 2
++    pagamento = next(t for t in transacoes if t["tipo"] == "pagamento")
++    assert pagamento["valor_sats"] < 0
++    assert pagamento["contraparte"] == "12345678901"
++    assert pagamento["status"] == "concluida"
++    assert pagamento["descricao"] == "material adquirido"
+ 
+ 
+ def test_post_pagar_sem_pais_br_retorna_403(client, db_session):
+@@ -285,12 +354,8 @@ def test_get_transacoes_lista_ordem_desc(client, db_session):
+     """Transações aparecem da mais recente pra mais antiga."""
+     _, _, headers = _criar_usuaria_logada(client, pais="BR")
+ 
+-    # Cria duas transações: um depósito e um pagamento.
+-    client.post(
+-        "/carteira/depositar",
+-        json={"valor_centavos_brl": 10000},
+-        headers=headers,
+-    )
++    # Cria duas transações: um depósito confirmado e um pagamento.
++    _depositar_confirmado(client, headers, 10000)
+     client.post(
+         "/carteira/pagar",
+         json={

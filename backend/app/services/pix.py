@@ -44,6 +44,11 @@ class MercadoPagoPixService:
         self.base_url = base_url.rstrip("/")
         self._mock = not bool(access_token)
         self._is_test_credential = access_token.startswith("TEST-")
+        # Mapa mp_payment_id -> txid, só usado em modo mock: permite que
+        # consultar_pagamento() devolva o external_reference certo depois,
+        # como o Mercado Pago real faria — sem isso, uma segunda chamada
+        # mock não teria como saber qual txid corresponde a qual pagamento.
+        self._mock_txids: dict[str, str] = {}
 
     @property
     def is_mock(self) -> bool:
@@ -60,10 +65,11 @@ class MercadoPagoPixService:
 
     # ── Mock helpers ─────────────────────────────────────────────
 
-    @staticmethod
-    def _mock_cobranca(valor_brl: float, txid: str) -> dict:
+    def _mock_cobranca(self, valor_brl: float, txid: str) -> dict:
+        mp_payment_id = "mock_" + secrets.token_hex(8)
+        self._mock_txids[mp_payment_id] = txid
         return {
-            "mp_payment_id": "mock_" + secrets.token_hex(8),
+            "mp_payment_id": mp_payment_id,
             "txid": txid,
             "status": "pending",
             "qr_code": f"00020126mockpix{txid}52040000530398654{valor_brl:.2f}5802BR6009MOCKCITY",
@@ -71,12 +77,11 @@ class MercadoPagoPixService:
             "ticket_url": f"https://mock.mercadopago.local/pix/{txid}",
         }
 
-    @staticmethod
-    def _mock_consulta(mp_payment_id: str) -> dict:
+    def _mock_consulta(self, mp_payment_id: str) -> dict:
         return {
             "mp_payment_id": mp_payment_id,
             "status": "approved",
-            "external_reference": None,
+            "external_reference": self._mock_txids.get(mp_payment_id),
         }
 
     @staticmethod

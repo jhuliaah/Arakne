@@ -57,3 +57,4 @@ bitcoin-data/
 lnd-data/
 lnbits-data/
 .venv/
+.breez-test-*/

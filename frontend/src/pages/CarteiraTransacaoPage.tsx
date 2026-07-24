@@ -37,6 +37,7 @@ import {
   pagarCarteira,
   gerarQuitacaoCarteira,
   getStatusPagamentoPix,
+  getTransacoesCarteira,
   SATS_TO_BRL,
 } from "../api";
 import type { DepositarCarteiraResponse, GerarQuitacaoResponse, Usuaria } from "../types";
@@ -443,10 +444,35 @@ export default function CarteiraTransacaoPage({
     }
   }
 
-  /** Inicia polling de status a cada 3s (modos receber/quitar). */
+  /** Inicia polling de status a cada 3s (modos receber/quitar).
+   *
+   *  "quitar" (repagar empréstimo) usa /pix/pagamentos/{txid} — cria um
+   *  PagamentoPix de verdade, o mesmo fluxo já testado ponta-a-ponta.
+   *
+   *  "receber" (depósito na carteira) NÃO cria PagamentoPix (ver
+   *  routers/carteira.py — essa tabela é só pra repagamento de
+   *  empréstimo); consulta /carteira/transacoes e casa pelo txid, que é
+   *  onde o webhook do Pix agora também sabe confirmar essa transação. */
   function iniciarPolling(txid: string) {
     stopPolling();
     pollingRef.current = window.setInterval(async () => {
+      if (modo === "receber") {
+        const transacoes = await getTransacoesCarteira();
+        if (!transacoes) return; // erro de rede → mantém polling
+        const transacao = transacoes.find((t) => t.txid === txid);
+        if (!transacao) return; // ainda não apareceu no extrato
+        if (transacao.status === "concluida") {
+          stopPolling();
+          onTransacaoConcluida();
+          setTimeout(() => onBack(), 2000);
+        } else if (transacao.status === "falhou") {
+          stopPolling();
+          setErro("O depósito falhou. Tente gerar um novo código.");
+          setEtapa("erro");
+        }
+        return;
+      }
+
       const status = await getStatusPagamentoPix(txid);
       if (!status) return; // erro de rede → mantém polling
       if (status.status === "aprovado") {

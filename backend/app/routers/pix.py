@@ -23,6 +23,7 @@ from app.database import get_db
 from app.models.conversao_pool import ConversaoPool
 from app.models.emprestimo import Emprestimo
 from app.models.pagamento_pix import PagamentoPix
+from app.models.transacao_carteira import TransacaoCarteira
 from app.schemas.pix import (
     CobrancaPixRequest,
     CobrancaPixResponse,
@@ -30,7 +31,7 @@ from app.schemas.pix import (
     WebhookPixResponse,
 )
 from app.services.exchange import BinanceError, exchange
-from app.services.lnbits import lnbits
+from app.services.coinos import coinos as lnbits
 from app.services.pix import MercadoPagoPixError, pix
 from app.services.risco import ao_quitar
 
@@ -236,9 +237,30 @@ async def webhook_pix(request: Request, db: Session = Depends(get_db)):
     pagamento = (
         db.query(PagamentoPix).filter(PagamentoPix.mp_payment_id == mp_payment_id).first()
     )
-    if not pagamento:
-        logger.warning("Webhook Pix: mp_payment_id %s sem cobrança correspondente", mp_payment_id)
+    if pagamento:
+        _confirmar_pagamento(pagamento, db)
         return WebhookPixResponse(ok=True)
 
-    _confirmar_pagamento(pagamento, db)
+    # Não é repagamento de empréstimo — pode ser um depósito de carteira
+    # (routers/carteira.py::depositar), que não cria PagamentoPix (essa
+    # tabela é só pra repagamento). Casa pelo txid (external_reference)
+    # em vez de mp_payment_id, já que é isso que a carteira guarda.
+    txid = detalhe.get("external_reference")
+    transacao = (
+        db.query(TransacaoCarteira).filter(TransacaoCarteira.txid == txid).first()
+        if txid
+        else None
+    )
+    if transacao and transacao.status == "pendente":
+        transacao.status = "concluida"
+        db.commit()
+        # Nota: isso só confirma a linha do extrato. Creditar sats de
+        # verdade na wallet LNbits da usuária (a partir do BRL recebido)
+        # é uma etapa separada, ainda não implementada aqui — mesmo
+        # descompasso já registrado no doc mestre (carteira individual
+        # ainda não tem fluxo de crédito real conectado).
+        return WebhookPixResponse(ok=True)
+
+    if not transacao:
+        logger.warning("Webhook Pix: mp_payment_id %s sem cobrança correspondente", mp_payment_id)
     return WebhookPixResponse(ok=True)

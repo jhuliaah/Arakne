@@ -1,0 +1,19 @@
+diff --git a/backend/scripts/registrar_coinos_pool.py b/backend/scripts/registrar_coinos_pool.py
+index f0d69db..f94100e 100644
+--- a/backend/scripts/registrar_coinos_pool.py
++++ b/backend/scripts/registrar_coinos_pool.py
+@@ -29,6 +29,14 @@ def main():
+             resp = client.post(
+                 f"{COINOS_URL}/register",
+                 json={"user": {"username": username, "password": password}},
++                headers={
++                    "Content-Type": "application/json",
++                    "Accept": "application/json",
++                    "User-Agent": (
++                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
++                        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
++                    ),
++                },
+             )
+             resp.raise_for_status()
+             data = resp.json()

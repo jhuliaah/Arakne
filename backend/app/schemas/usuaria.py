@@ -96,6 +96,22 @@ class ApelidoUpdate(BaseModel):
         return v
 
 
+class PaisUpdate(BaseModel):
+    """Request body for PATCH /usuarias/me/pais — atualiza o país.
+
+    Usado pra liberar pagamentos Pix na carteira (routers/carteira.py),
+    que só fazem sentido pra quem está no Brasil.
+    """
+
+    pais: str = Field(
+        ...,
+        min_length=2,
+        max_length=2,
+        pattern=r"^[A-Z]{2}$",
+        description='Código de país ISO 3166-1 alpha-2 (ex: "BR").',
+    )
+
+
 class ConviteResponse(BaseModel):
     """Response for GET /usuarias/me/convite — invite link data."""
 

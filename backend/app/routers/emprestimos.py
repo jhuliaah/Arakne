@@ -20,7 +20,7 @@ from app.schemas.emprestimo import (
     PagamentoRequest,
     PagamentoResponse,
 )
-from app.services.lnbits import lnbits
+from app.services.coinos import coinos as lnbits
 from app.services.risco import ao_quitar, limite_por_tier, pode_emprestar
 
 router = APIRouter(prefix="/emprestimos", tags=["emprestimos"])

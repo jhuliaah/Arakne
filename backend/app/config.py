@@ -19,6 +19,22 @@ LNBITS_URL = os.getenv("LNBITS_URL", "http://lnbits:5000")
 LNBITS_ADMIN_KEY = os.getenv("LNBITS_ADMIN_KEY", "")
 LNBITS_POOL_KEY = os.getenv("LNBITS_POOL_KEY", "")
 
+# ── Coinos (carteira Lightning hospedada, substitui o LNbits pro MVP) ──
+# Decisão de 23/07: legend.lnbits.com é o servidor de DEMO oficial do
+# projeto LNbits — instável de propósito, não serve pra produção nem pra
+# demo confiável. Coinos (coinos.io) é uma carteira custodial hospedada
+# equivalente (nó com liquidez real já pronta, sem precisar abrir canal),
+# com API própria mais estável. Decisão de MVP, não arquitetura-alvo — a
+# reserva fria multisig (seção 6 do doc mestre, ver bloco abaixo)
+# continua sendo o objetivo real de custódia. Segurança fica pra depois
+# do hackathon.
+#
+# COINOS_POOL_TOKEN é o JWT de uma conta Coinos dedicada ao pool — gerada
+# uma vez (scripts/registrar_coinos_pool.py) e colada aqui, igual
+# LNBITS_POOL_KEY. Vazio por padrão → mock mode.
+COINOS_URL = os.getenv("COINOS_URL", "https://coinos.io/api")
+COINOS_POOL_TOKEN = os.getenv("COINOS_POOL_TOKEN", "")
+
 # ── Pix (Mercado Pago) ──────────────────────────────────────
 # MP_ACCESS_TOKEN empty by default; the pix service falls back to mock mode,
 # same pattern as LNbits above. Get a token at

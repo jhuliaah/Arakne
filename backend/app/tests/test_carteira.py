@@ -130,6 +130,39 @@ def test_post_depositar_sem_token_retorna_401(client, db_session):
     assert resp.status_code == 401
 
 
+def test_webhook_confirma_deposito_de_carteira_via_txid(client, db_session):
+    """O webhook do /pix precisa saber confirmar um depósito de carteira
+    mesmo sem PagamentoPix (essa tabela é só pra repagamento de
+    empréstimo) — casa pelo txid (external_reference) em vez de
+    mp_payment_id, e credita a TransacaoCarteira correspondente."""
+    assert pix.is_mock
+    _, _, headers = _criar_usuaria_logada(client)
+
+    resp = client.post(
+        "/carteira/depositar",
+        json={"valor_centavos_brl": 15000},
+        headers=headers,
+    )
+    txid = resp.json()["txid"]
+    assert txid.startswith("arakne-cart-")
+
+    # DepositarResponse não expõe mp_payment_id (só txid) — pega do mapa
+    # interno do mock, que agora lembra qual mp_payment_id corresponde a
+    # qual txid (mesmo comportamento que o Mercado Pago real teria).
+    mp_payment_id = next(k for k, v in pix._mock_txids.items() if v == txid)
+
+    webhook_resp = client.post(
+        "/pix/webhook",
+        json={"type": "payment", "data": {"id": mp_payment_id}},
+    )
+    assert webhook_resp.status_code == 200
+
+    transacoes = client.get("/carteira/transacoes", headers=headers).json()
+    assert len(transacoes) == 1
+    assert transacoes[0]["txid"] == txid
+    assert transacoes[0]["status"] == "concluida"
+
+
 def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
     assert pix.is_mock
     assert exchange.is_mock

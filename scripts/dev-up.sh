@@ -3,10 +3,14 @@
 #  Arakne — Sobe tudo (backend + frontend + dados demo)
 #
 #  Uso:
-#    bash scripts/dev-up.sh             # sobe back + front
-#    bash scripts/dev-up.sh --seed      # reseta DB + cria dados demo antes
-#    bash scripts/dev-up.sh --multisig  # registra custódia multisig antes
-#    bash scripts/dev-up.sh --all       # seed + multisig + sobe
+#    bash scripts/dev-up.sh                # sobe back + front
+#    bash scripts/dev-up.sh --seed         # reseta DB + cria dados demo antes
+#    bash scripts/dev-up.sh --seed-trilhas # só recarrega o catálogo de
+#                                           # trilhas (contas preservadas —
+#                                           # use isto se já tem uma conta
+#                                           # real com saldo que não quer perder)
+#    bash scripts/dev-up.sh --multisig     # registra custódia multisig antes
+#    bash scripts/dev-up.sh --all          # seed + multisig + sobe
 #
 #  Ctrl+C derruba ambos os servadores graciosamente.
 #  Logs: backend.log e frontend.log na pasta do repo.
@@ -41,12 +45,14 @@ err()  { echo -e "${C_RED}[$(date +%H:%M:%S)] ERRO${C_RESET} $*" >&2; }
 
 # ── Parse args ────────────────────────────────────────────────
 DO_SEED=false
+DO_SEED_TRILHAS=false
 DO_MULTISIG=false
 for arg in "$@"; do
   case "$arg" in
-    --seed)     DO_SEED=true ;;
-    --multisig) DO_MULTISIG=true ;;
-    --all)      DO_SEED=true; DO_MULTISIG=true ;;
+    --seed)         DO_SEED=true ;;
+    --seed-trilhas) DO_SEED_TRILHAS=true ;;
+    --multisig)     DO_MULTISIG=true ;;
+    --all)          DO_SEED=true; DO_MULTISIG=true ;;
     *) err "Argumento desconhecido: $arg"; exit 1 ;;
   esac
 done
@@ -101,6 +107,22 @@ if $DO_SEED; then
   sleep 1
   ( cd "$BACKEND_DIR" && python seed_demo.py ) || { err "seed_demo.py falhou"; exit 1; }
   ok "dados demo criados (FUNDADORA + FORNECEDORA + 9 trilhas/54 aulas/127 materiais)"
+elif $DO_SEED_TRILHAS; then
+  # Só recarrega o catálogo de trilhas (Trilha/Aula/Material) — NUNCA
+  # toca em Usuaria/Emprestimo/etc. Existe porque um banco criado do zero
+  # (create_all() na primeira subida, sem --seed) tem as tabelas mas fica
+  # com o catálogo vazio — "Nenhuma trilha encontrada" na tela, mesmo com
+  # contas reais e dinheiro real já configurados que você não quer perder
+  # resetando tudo com --seed.
+  log "Recarregando só o catálogo de trilhas (seed_trilhas, contas preservadas)..."
+  ( cd "$BACKEND_DIR" && python3 -c "
+from app.database import SessionLocal
+from seed_demo import seed_trilhas
+db = SessionLocal()
+seed_trilhas(db)
+db.close()
+" ) || { err "seed_trilhas falhou"; exit 1; }
+  ok "catálogo de trilhas recarregado (contas preservadas)"
 fi
 
 # ── 4. Multisig (opcional) ────────────────────────────────────
