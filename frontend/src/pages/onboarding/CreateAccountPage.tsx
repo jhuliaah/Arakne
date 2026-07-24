@@ -68,13 +68,13 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
     setError(null);
     setLoading(true);
     try {
-      // 1. Cria identidade Nostr: gera nsec direto (32 bytes), deriva npub,
-      //    criptografa nsec com o padrão e guarda no localStorage.
-      const identity: NostrIdentity = await createAndStoreIdentity(pattern);
-
-      // 2. Cria conta no backend com o PIN escolhido pela usuária
+      // 1. Cria conta no backend PRIMEIRO, com o PIN escolhido pela usuária
       //    (Mudança #8 — antes era generatePin()). O PIN é o "código de
       //    reserva" que a usuária vai anotar e usar na recuperação social.
+      //    Só persistimos a identidade Nostr local depois que a conta no
+      //    backend é confirmada — caso contrário, uma falha de rede deixaria
+      //    uma "identidade fantasma" no localStorage que enganaria o bootstrap
+      //    no próximo refresh (hasStoredIdentity() true sem conta real).
       const apelido = nome.trim() || undefined;
       const usuaria = await criarConta(pin, inviteCodigo, undefined, apelido);
       if (!usuaria) {
@@ -87,6 +87,11 @@ export default function CreateAccountPage({ inviteCodigo, onBack, onCreated }: C
         setLoading(false);
         return;
       }
+
+      // 2. Conta criada no backend — agora é seguro criar e guardar a
+      //    identidade Nostr: gera nsec direto (32 bytes), deriva npub,
+      //    criptografa nsec com o padrão e guarda no localStorage.
+      const identity: NostrIdentity = await createAndStoreIdentity(pattern);
 
       if (apelido) setNickname(apelido);
       onCreated(identity.npub, identity.nsec, pin);
