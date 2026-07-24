@@ -42,7 +42,7 @@
 import { useEffect, useRef, useState } from "react";
 import Header from "../../components/Header";
 import HexPatternCanvas from "../../components/HexPatternCanvas";
-import { markUnlockedThisSession, getNpubByIdentificador } from "../../api";
+import { markUnlockedThisSession, getNpubByIdentificador, updateNpub, setIdentificador as setStoredIdentificador, setPin as setStoredPin } from "../../api";
 import {
   startRecoveryRequest,
   startRecoveryRequestWithNsec,
@@ -53,7 +53,7 @@ import {
 } from "../../lib/recovery-request";
 import { adoptRecoveredIdentity, resetFailedAttempts } from "../../lib/pattern-storage";
 import { base64ToBytes } from "../../lib/recovery-serialize";
-import { decodeNsec } from "../../lib/nostr-keys";
+import { createNostrIdentity, decodeNsec } from "../../lib/nostr-keys";
 
 interface RecoverAccountPageProps {
   /** Chamado quando o nsec foi recuperado, guardado e a sessão destravada. */
@@ -200,6 +200,37 @@ export default function RecoverAccountPage({
           setPhase("waiting");
           // Sem subscribe nem timeout: a dona vai colar o paper backup.
           return;
+        }
+        // Fallback de recuperação simples: o login succeeded (PIN correto),
+        // mas não há shares SSSS nem avalistas configurados. Em vez de
+        // bloquear, geramos uma nova identidade Nostr e vinculamos à conta
+        // do backend — o saldo/tier/empréstimos estão no backend, não no
+        // nsec. A dona desenha um novo Ponto Arakne e o app adota a nova
+        // identidade. SSSS pode ser configurado depois pelo FinancialPage.
+        if (!result.loginFailed) {
+          try {
+            const identity = createNostrIdentity();
+            const nsecBytes = decodeNsec(identity.nsec);
+            // updateNpub usa o token do localStorage (setado por
+            // startRecoveryRequest via setToken). Se falhar, ainda assim
+            // adotamos a identidade — o npub será atualizado na próxima
+            // chamada autenticada.
+            await updateNpub(localStorage.getItem("arakne_token") || "", identity.npub);
+            // Guarda as credenciais no localStorage para ensureToken
+            // funcionar nas telas financeiras.
+            setStoredIdentificador(id);
+            setStoredPin(pinTrim);
+            localStorage.setItem("arakne_npub", identity.npub);
+            // Marca como não distribuído para o FinancialPage poder
+            // configurar SSSS depois.
+            localStorage.removeItem("arakne_recovery_distributed");
+            nsecDirectRef.current = nsecBytes;
+            setResponses([]);
+            setPhase("newPattern");
+            return;
+          } catch (err) {
+            console.error("[RecoverAccountPage] fallback de recuperação simples falhou:", err);
+          }
         }
         // Nem backend nem convidadora — não dá para recuperar.
         setErrorMsg(
