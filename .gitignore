@@ -39,6 +39,7 @@ scripts/custodia_multisig_*.json
 .env
 .env.*
 !.env.example
+!.env.mock
 
 # Python / Backend
 __pycache__/

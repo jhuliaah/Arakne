@@ -58,7 +58,8 @@ Projeto do hackathon **hack4freedom** (só mulheres).
 Há um script que sobe backend + frontend com venv automático:
 
 ```bash
-bash scripts/dev-up.sh --all   # cria venv, instala deps, roda seed + multisig, sobe tudo
+bash scripts/dev-up.sh --all   # cria venv, instala deps, roda seed + multisig + tunnel, sobe tudo
+bash scripts/dev-up.sh --mock  # DEMO: modo mock (zero credenciais reais), seed + sobe tudo
 ```
 
 Ou manualmente:
@@ -403,19 +404,92 @@ exatos de método em `receberPagamento`/`prepararEnvio`.
 
 ---
 
-## `.env.mock` — demo sem nenhuma credencial real
+## Demo em modo mock (zero credenciais reais)
 
 Pra rodar a demo pros avaliadores (ou qualquer teste) com **zero risco** de
-tocar em dinheiro/conta real:
+tocar em dinheiro/conta real, use a flag `--mock` do `dev-up.sh`:
 
 ```bash
-cp .env.mock .env
-cd backend && python3 seed_demo.py && python3 run_demo.py
+bash scripts/dev-up.sh --mock
 ```
 
-Todo campo em `.env.mock` é vazio de propósito — LNbits, Pix e Binance caem
-em mock sozinhos. Nunca sobrescreva isso com o `.env` que tem suas
-credenciais reais de trabalho.
+O script faz tudo automaticamente:
+
+1. **Salva** seu `.env` real em `.env.real.bak`
+2. **Copia** `.env.mock` para `.env` (todas as credenciais vazias → mock)
+3. **Roda o seed** (reseta DB + cria FUNDADORA + FORNECEDORA + 9 trilhas/54 aulas)
+4. **Sobe** backend (:8000) + frontend (:5173)
+5. Ao pressionar **Ctrl+C**: mata os servidores e **restaura** o `.env` real
+
+Todo campo em `.env.mock` é vazio de propósito — LNbits, Coinos, Pix,
+Binance e custódia caem em mock sozinhos. Nenhuma chamada externa é feita.
+Nunca sobrescreva o `.env.mock` com suas credenciais reais.
+
+> **Importante:** o `.env.mock` é gitignored (igual `.env`). Ele é
+> compartilhado com o time só como referência — cada máquina tem o seu.
+
+### Credenciais demo
+
+| Usuária      | Identificador  | PIN  | Tier | Notas                                  |
+|--------------|----------------|------|------|----------------------------------------|
+| Fundadora    | `FUNDADORA`    | 1234 | 3    | Mestra, npub via /demo-setup           |
+| Fornecedora  | `FORNECEDORA`  | 1234 | 3    | Mestra, ponto de troca para testes     |
+| Convidada    | (criada na demo) | —  | 1    | Nasce pelo link `/convite/FUNDADORA_INVITE` |
+
+### Roteiro da demo (passo a passo, ~10 min)
+
+#### Cena 1 — O disfarce (2 min)
+1. Abrir `http://localhost:5173` — catálogo de trilhas de crochê
+2. Navegar pelas 9 trilhas (Ponto Baixo, Ponto Alto, Ponto Renascido...)
+3. Abrir uma trilha qualquer → ver aulas e materiais
+4. **Ponto chave:** nenhuma menção a dinheiro, cripto, empréstimo
+
+#### Cena 2 — O portal (2 min)
+1. Abrir a trilha 9 ("Ponto Renascido") → nível 1 → aula 1
+2. A aula não tem conteúdo — mostra um canvas para desenhar um padrão
+3. Desenhar o Ponto Arakne (padrão correto) → destrava a camada financeira
+4. **Ponto chave:** o gesto oculto revela o microcrédito
+
+#### Cena 3 — A FinancialPage (2 min)
+1. Após destravar, ver a FinancialPage ("Seu ateliê"):
+   - Card de nível (tier) e saldo devedor ("padrão em andamento")
+   - Cesta de novelos (carteira) com saldo e cotação
+   - Botões: Entregar novelos, Receber novelos, Devolver novelos
+   - Fornecedoras de Linha (pontos de troca)
+   - Tecelã de confiança (avalista de recuperação)
+2. **Ponto chave:** tudo em vocabulário crochê — "novelos", "fios", "ateliê"
+
+#### Cena 4 — Solicitar microcrédito (1 min)
+1. Na FinancialPage, clicar em "Puxar novelos"
+2. Informar valor em sats → cria empréstimo (mock Lightning)
+3. Ver saldo devedor aumentar + empréstimo na lista
+
+#### Cena 5 — Repagamento via Pix (2 min)
+1. Clicar em "Devolver novelos" num empréstimo
+2. Escolher "Pagar com Pix" → gera QR code Pix (mock)
+3. (Em mock mode, o pagamento é confirmado automaticamente)
+4. Ver "Pagamento confirmado! Novelos devolvidos."
+5. Ver saldo devedor zerar + tier subir
+
+#### Cena 6 — Cesta de novelos (carteira) (1 min)
+1. Na FinancialPage, ver o card "Cesta de novelos"
+2. Clicar "Receber novelos" → tela de transação
+3. Selecionar país (Brasil habilita pagamento)
+4. Informar valor em BRL → gera QR Pix para depósito (mock)
+
+#### Cena 7 — Recuperação de conta (2 min)
+1. Sair da conta (sem apagar identidade)
+2. Tela de login → "Recuperar acesso"
+3. Escolher "Tenho meu PIN" → informar identificador + PIN
+4. Desenhar um novo Ponto Arakne → conta recuperada
+5. **Ponto chave:** recuperação por PIN sem depender de tecelãs
+
+### Demo automatizada (verifica todo o fluxo de microcrédito)
+
+```bash
+cd backend
+python run_demo.py    # <10s, mock mode
+```
 
 ---
 
