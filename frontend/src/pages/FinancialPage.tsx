@@ -804,8 +804,10 @@ export default function FinancialPage({
             Card de saldo da carteira interna (sats + BRL). Disfarce:
             "Cesta de novelos" + "Seus novelos" + "Valor do novelo".
             Os botões falam em "Entregar novelos", "Receber novelos" e
-            "Devolver novelos" (vocabulário já existente). sats aparece
-            em texto pequeno, como detalhe. */}
+            "Devolver novelos" (vocabulário já existente). A unidade
+            interna (sats) e a cotação de BTC não aparecem mais na tela
+            — o disfarce vale para a interface inteira, sem exceção,
+            mesmo em texto pequeno. */}
         <div className="financial__invite carteira-card">
           <h3 className="financial__history-title">Cesta de novelos</h3>
           <div className="carteira-card__saldo">
@@ -821,12 +823,12 @@ export default function FinancialPage({
               {saldoCarteira
                 ? saldoCarteira.saldo_sats.toLocaleString("pt-BR")
                 : 0}{" "}
-              sats
+              fios
             </p>
           </div>
           {saldoCarteira && saldoCarteira.cotacao_btc_brl > 0 && (
             <p className="carteira-card__cotacao">
-              Valor do novelo: 1 BTC = {brlFormatter.format(saldoCarteira.cotacao_btc_brl)}
+              Valor do novelo: {brlFormatter.format(saldoCarteira.cotacao_btc_brl)}
             </p>
           )}
           <div className="carteira-card__botoes">
@@ -1286,7 +1288,7 @@ export default function FinancialPage({
               // ── Pix confirmed: fecha automaticamente em 2s ──
               <div className="repay-result">
                 <div className="repay-result__icon">✅</div>
-                <h3 className="repay-result__title">Pagamento confirmado!</h3>
+                <h3 className="repay-result__title">Registro atualizado!</h3>
                 <p className="repay-result__text">
                   Novelos devolvidos. Seu ateliê já está atualizado.
                 </p>
