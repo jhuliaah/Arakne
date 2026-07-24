@@ -46,6 +46,7 @@ import init, {
   connect,
   defaultConfig,
   type BreezSdk,
+  type PrepareSendPaymentResponse,
 } from "@breeztech/breez-sdk-spark/web";
 
 /** Converte os 32 bytes do nsec numa mnemonic BIP-39 de 24 palavras.
@@ -67,7 +68,7 @@ export function mnemonicFromNsecBytes(nsecBytes: Uint8Array): string {
 
 export interface BreezWalletConfig {
   apiKey: string;
-  network?: "mainnet" | "testnet";
+  network?: "mainnet" | "regtest";
   /** Diretório/chave de armazenamento local do SDK (WASM). Ver ressalva no
    *  módulo: valor exato de storageDir para o alvo /web ainda precisa ser
    *  confirmado rodando de verdade — comece com algo simples como o
@@ -127,14 +128,14 @@ export async function receberPagamento(
   const resposta = await sdk.receivePayment({
     paymentMethod: { type: "bolt11Invoice", amountSats, description: descricao },
   });
-  return { invoice: resposta.paymentRequest ?? resposta.destination, expiraEm: resposta.expiresAt };
+  return { invoice: resposta.paymentRequest };
 }
 
 export interface PrepararEnvioResultado {
   /** Taxa estimada, em sats — mostre isso pra usuária ANTES de confirmar. */
   feesSats: number;
   /** Passe este objeto de volta pra confirmarEnvio() — nunca reconstrua na mão. */
-  prepareResponse: unknown;
+  prepareResponse: PrepareSendPaymentResponse;
 }
 
 /** Passo 1 de um envio: só cotação/preparação, NÃO move nada ainda.
@@ -143,9 +144,9 @@ export async function prepararEnvio(
   sdk: BreezSdk,
   destino: string // bolt11 invoice, ou endereço Spark/on-chain
 ): Promise<PrepararEnvioResultado> {
-  const prepareResponse = await sdk.prepareSendPayment({ destination: destino });
+  const prepareResponse = await sdk.prepareSendPayment({ paymentRequest: destino });
   return {
-    feesSats: (prepareResponse as { feesSat?: number }).feesSat ?? 0,
+    feesSats: Number(prepareResponse.amount ?? 0n),
     prepareResponse,
   };
 }
