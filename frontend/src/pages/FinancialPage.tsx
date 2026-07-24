@@ -823,7 +823,7 @@ export default function FinancialPage({
               {saldoCarteira
                 ? saldoCarteira.saldo_sats.toLocaleString("pt-BR")
                 : 0}{" "}
-              fios
+              novelo(s)
             </p>
           </div>
           {saldoCarteira && saldoCarteira.cotacao_btc_brl > 0 && (
@@ -1356,7 +1356,7 @@ export default function FinancialPage({
                     quanto está devolvendo em dinheiro bancário via Pix. */}
                 {repayModal.valor && parseInt(repayModal.valor, 10) > 0 && (
                   <p className="modal__hint">
-                    {parseInt(repayModal.valor, 10).toLocaleString("pt-BR")} sats ≈{" "}
+                    {parseInt(repayModal.valor, 10).toLocaleString("pt-BR")} novelo(s) ≈{" "}
                     {brlFormatter.format(parseInt(repayModal.valor, 10) * SATS_TO_BRL)}
                   </p>
                 )}

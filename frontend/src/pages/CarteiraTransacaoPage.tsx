@@ -465,7 +465,7 @@ export default function CarteiraTransacaoPage({
           setTimeout(() => onBack(), 2000);
         } else if (verificacao.status === "falhou") {
           stopPolling();
-          setErro("O depósito falhou. Tente gerar um novo código.");
+          setErro("O código de fios falhou. Tente gerar um novo.");
           setEtapa("erro");
         }
         return;
@@ -594,7 +594,7 @@ export default function CarteiraTransacaoPage({
                 {centavos > 0 && (
                   <p className="field__hint">
                     {brlFormatter.format(centavos / 100)} ≈{" "}
-                    {Math.round(centavos / 100 / SATS_TO_BRL).toLocaleString("pt-BR")} sats
+                    {Math.round(centavos / 100 / SATS_TO_BRL).toLocaleString("pt-BR")} novelo(s)
                   </p>
                 )}
               </div>
@@ -616,7 +616,7 @@ export default function CarteiraTransacaoPage({
                 />
                 {satsQuitar > 0 && (
                   <p className="field__hint">
-                    {satsQuitar.toLocaleString("pt-BR")} sats ≈{" "}
+                    {satsQuitar.toLocaleString("pt-BR")} novelo(s) ≈{" "}
                     {brlFormatter.format(satsQuitar * SATS_TO_BRL)}
                   </p>
                 )}
