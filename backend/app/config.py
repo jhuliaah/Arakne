@@ -1,8 +1,10 @@
 """Application configuration — reads from environment variables.
 
-LNbits keys are empty by default; the backend falls back to mock mode.
-To enable real Lightning payments, set LNBITS_ADMIN_KEY and LNBITS_POOL_KEY
-after creating wallets in the LNbits UI (http://localhost:5000).
+Coinos (coinos.io) é a carteira Lightning hospedada usada pelo pool.
+COINOS_POOL_TOKEN vazio → mock mode. LNbits foi substituído pelo Coinos
+no MVP (23/07) — as vars LNBITS_* ainda existem aqui porque o módulo
+services/lnbits.py é referenciado pelos testes, mas os routers de
+produção usam from app.services.coinos import coinos as lnbits.
 """
 
 import os
