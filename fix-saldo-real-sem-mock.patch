@@ -1,5 +1,5 @@
 diff --git a/backend/app/routers/carteira.py b/backend/app/routers/carteira.py
-index 4756d77..eb92759 100644
+index 4ba5d39..45676d3 100644
 --- a/backend/app/routers/carteira.py
 +++ b/backend/app/routers/carteira.py
 @@ -15,6 +15,7 @@ import secrets
@@ -14,7 +14,7 @@ index 4756d77..eb92759 100644
      TransacaoCarteiraResponse,
  )
  from app.services.exchange import exchange
--from app.services.lnbits import lnbits
+-from app.services.coinos import coinos as lnbits
  from app.services.pix import pix
  
  router = APIRouter(prefix="/carteira", tags=["carteira"])
@@ -26,7 +26,7 @@ index 4756d77..eb92759 100644
  
  def _gerar_txid_carteira(usuaria_id: int) -> str:
      """txid único pra cobranças Pix da carteira — mesmo padrão do router
-@@ -51,14 +47,33 @@ def _gerar_txid_carteira(usuaria_id: int) -> str:
+@@ -51,14 +47,30 @@ def _gerar_txid_carteira(usuaria_id: int) -> str:
      return f"arakne-cart-{usuaria_id}-{secrets.token_hex(6)}"
  
  
@@ -40,21 +40,18 @@ index 4756d77..eb92759 100644
 -    return balance.get("balance_msats", 0) // 1000
 +def _saldo_sats_da_usuaria(db: Session, usuaria: Usuaria) -> int:
 +    """Saldo real da carteira = soma do histórico de transações
-+    confirmadas (TransacaoCarteira) — não é mais consulta ao LNbits.
++    confirmadas (TransacaoCarteira) — não é mais consulta direta a um
++    provedor de wallet Lightning (LNbits/Coinos).
 +
-+    Por quê a mudança: a wallet LNbits individual por usuária não é real
-+    ainda (create_wallet falha — 401 no provedor hospedado; isso é escopo
-+    do Breez SDK, seção 22 do doc mestre, não implementado ainda).
-+    Consultar `lnbits.get_wallet_balance()` contra uma chave que nunca foi
-+    registrada de verdade dava 404, e o fallback de saldo fixo (50.000
-+    sats fake) escondia esse problema em vez de mostrar o saldo real.
-+
-+    O ledger (TransacaoCarteira) já é a fonte de verdade correta: cada
-+    linha tem `valor_sats` com sinal (positivo = entrada, negativo =
-+    saída, ver docstring do model) e já é atualizado certinho pelo
-+    webhook do Pix (routers/pix.py::webhook_pix) a cada depósito real
-+    confirmado. Somar isso é mais simples E mais correto do que fingir
-+    uma wallet Lightning individual que ainda não existe.
++    Por quê: mesmo com o Coinos substituindo o LNbits (ver
++    services/coinos.py), consultar saldo em tempo real num provedor
++    custodial de terceiros a cada request é acoplamento desnecessário —
++    e foi exatamente essa consulta ao vivo que já quebrou uma vez com um
++    404 (chave mock testada contra API real). O ledger da Arakne já é a
++    fonte de verdade correta: cada linha tem `valor_sats` com sinal
++    (positivo = entrada, negativo = saída, ver docstring do model) e já é
++    atualizado certinho pelo webhook do Pix (routers/pix.py::webhook_pix)
++    a cada depósito/pagamento real confirmado.
 +    """
 +    total = (
 +        db.query(func.coalesce(func.sum(TransacaoCarteira.valor_sats), 0))
@@ -68,7 +65,7 @@ index 4756d77..eb92759 100644
  
  
  @router.get(
-@@ -82,16 +97,17 @@ def get_cotacao(
+@@ -82,16 +94,17 @@ def get_cotacao(
      "/saldo",
      response_model=SaldoResponse,
      summary="Saldo da carteira (sats + BRL)",
@@ -90,15 +87,7 @@ index 4756d77..eb92759 100644
      saldo_brl = saldo_sats / 100_000_000 * preco_brl
      return SaldoResponse(
          saldo_sats=saldo_sats,
-@@ -160,6 +176,7 @@ def depositar(
- 
-     transacao = TransacaoCarteira(
-         usuaria_id=current_usuaria.id,
-+        txid=txid,
-         tipo="deposito",
-         valor_sats=valor_sats,
-         valor_centavos_brl=payload.valor_centavos_brl,
-@@ -209,7 +226,7 @@ def pagar(
+@@ -210,7 +223,7 @@ def pagar(
          (payload.valor_centavos_brl / 100) / preco_brl * 100_000_000
      )
  
@@ -108,10 +97,18 @@ index 4756d77..eb92759 100644
          raise HTTPException(
              status.HTTP_400_BAD_REQUEST,
 diff --git a/backend/app/tests/test_carteira.py b/backend/app/tests/test_carteira.py
-index 49873b6..71c2cb3 100644
+index 0f6e1c0..68faa77 100644
 --- a/backend/app/tests/test_carteira.py
 +++ b/backend/app/tests/test_carteira.py
-@@ -45,6 +45,31 @@ def _criar_usuaria_logada(client, pin="1234", pais=None):
+@@ -14,7 +14,6 @@ Roda inteiro em mock mode (LNbits, Pix, Binance), mesmo padrão de test_pix.py.
+ from app.models.transacao_carteira import TransacaoCarteira
+ from app.models.usuaria import Usuaria
+ from app.services.exchange import exchange
+-from app.services.lnbits import lnbits
+ from app.services.pix import pix
+ 
+ 
+@@ -45,6 +44,31 @@ def _criar_usuaria_logada(client, pin="1234", pais=None):
      return u, token, {"Authorization": f"Bearer {token}"}
  
  
@@ -143,7 +140,7 @@ index 49873b6..71c2cb3 100644
  def _dar_aval(client, avalista_codigo, nova_ident):
      resp = client.post("/avais", json={
          "avalista_codigo_indicacao": avalista_codigo,
-@@ -84,17 +109,23 @@ def test_get_cotacao_sem_token_retorna_401(client, db_session):
+@@ -84,17 +108,23 @@ def test_get_cotacao_sem_token_retorna_401(client, db_session):
  
  
  def test_get_saldo_retorna_sats_e_brl_convertido(client, db_session):
@@ -173,45 +170,7 @@ index 49873b6..71c2cb3 100644
      assert abs(data["saldo_brl"] - round(esperado_brl, 2)) < 0.01
  
  
-@@ -130,11 +161,48 @@ def test_post_depositar_sem_token_retorna_401(client, db_session):
-     assert resp.status_code == 401
- 
- 
-+def test_webhook_confirma_deposito_de_carteira_via_txid(client, db_session):
-+    """O webhook do /pix precisa saber confirmar um depósito de carteira
-+    mesmo sem PagamentoPix (essa tabela é só pra repagamento de
-+    empréstimo) — casa pelo txid (external_reference) em vez de
-+    mp_payment_id, e credita a TransacaoCarteira correspondente."""
-+    assert pix.is_mock
-+    _, _, headers = _criar_usuaria_logada(client)
-+
-+    resp = client.post(
-+        "/carteira/depositar",
-+        json={"valor_centavos_brl": 15000},
-+        headers=headers,
-+    )
-+    txid = resp.json()["txid"]
-+    assert txid.startswith("arakne-cart-")
-+
-+    # DepositarResponse não expõe mp_payment_id (só txid) — pega do mapa
-+    # interno do mock, que agora lembra qual mp_payment_id corresponde a
-+    # qual txid (mesmo comportamento que o Mercado Pago real teria).
-+    mp_payment_id = next(k for k, v in pix._mock_txids.items() if v == txid)
-+
-+    webhook_resp = client.post(
-+        "/pix/webhook",
-+        json={"type": "payment", "data": {"id": mp_payment_id}},
-+    )
-+    assert webhook_resp.status_code == 200
-+
-+    transacoes = client.get("/carteira/transacoes", headers=headers).json()
-+    assert len(transacoes) == 1
-+    assert transacoes[0]["txid"] == txid
-+    assert transacoes[0]["status"] == "concluida"
-+
-+
- def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
-     assert pix.is_mock
+@@ -168,6 +198,10 @@ def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
      assert exchange.is_mock
      _, _, headers = _criar_usuaria_logada(client, pais="BR")
  
@@ -222,7 +181,7 @@ index 49873b6..71c2cb3 100644
      resp = client.post(
          "/carteira/pagar",
          json={
-@@ -150,14 +218,15 @@ def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
+@@ -183,14 +217,15 @@ def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
      assert data["valor_centavos_brl"] == 5000
      assert data["valor_sats"] < 0  # saída: negativo
  
@@ -245,7 +204,7 @@ index 49873b6..71c2cb3 100644
  
  
  def test_post_pagar_sem_pais_br_retorna_403(client, db_session):
-@@ -285,12 +354,8 @@ def test_get_transacoes_lista_ordem_desc(client, db_session):
+@@ -318,12 +353,8 @@ def test_get_transacoes_lista_ordem_desc(client, db_session):
      """Transações aparecem da mais recente pra mais antiga."""
      _, _, headers = _criar_usuaria_logada(client, pais="BR")
  

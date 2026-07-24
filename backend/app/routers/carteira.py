@@ -15,6 +15,7 @@ import secrets
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.auth import _naive_utc, get_current_usuaria
@@ -35,14 +36,9 @@ from app.schemas.carteira import (
     TransacaoCarteiraResponse,
 )
 from app.services.exchange import exchange
-from app.services.coinos import coinos as lnbits
 from app.services.pix import pix
 
 router = APIRouter(prefix="/carteira", tags=["carteira"])
-
-# Saldo mock de demo (em sats) — usado quando a usuária não tem wallet LNbits
-# configurada (ex.: conta criada antes do campo lnbits_wallet_key existir).
-_SALDO_MOCK_SATS = 50_000
 
 
 def _gerar_txid_carteira(usuaria_id: int) -> str:
@@ -51,14 +47,30 @@ def _gerar_txid_carteira(usuaria_id: int) -> str:
     return f"arakne-cart-{usuaria_id}-{secrets.token_hex(6)}"
 
 
-def _saldo_sats_da_usuaria(usuaria: Usuaria) -> int:
-    """Consulta o saldo da usuária em sats via LNbits. Se ela não tem
-    wallet key (ou LNbits está em mock), devolve o saldo de demo."""
-    if not usuaria.lnbits_wallet_key:
-        return _SALDO_MOCK_SATS
-    balance = lnbits.get_wallet_balance(usuaria.lnbits_wallet_key)
-    # LNbits devolve millisatoshis; converte pra sats.
-    return balance.get("balance_msats", 0) // 1000
+def _saldo_sats_da_usuaria(db: Session, usuaria: Usuaria) -> int:
+    """Saldo real da carteira = soma do histórico de transações
+    confirmadas (TransacaoCarteira) — não é mais consulta direta a um
+    provedor de wallet Lightning (LNbits/Coinos).
+
+    Por quê: mesmo com o Coinos substituindo o LNbits (ver
+    services/coinos.py), consultar saldo em tempo real num provedor
+    custodial de terceiros a cada request é acoplamento desnecessário —
+    e foi exatamente essa consulta ao vivo que já quebrou uma vez com um
+    404 (chave mock testada contra API real). O ledger da Arakne já é a
+    fonte de verdade correta: cada linha tem `valor_sats` com sinal
+    (positivo = entrada, negativo = saída, ver docstring do model) e já é
+    atualizado certinho pelo webhook do Pix (routers/pix.py::webhook_pix)
+    a cada depósito/pagamento real confirmado.
+    """
+    total = (
+        db.query(func.coalesce(func.sum(TransacaoCarteira.valor_sats), 0))
+        .filter(
+            TransacaoCarteira.usuaria_id == usuaria.id,
+            TransacaoCarteira.status == "concluida",
+        )
+        .scalar()
+    )
+    return int(total or 0)
 
 
 @router.get(
@@ -82,16 +94,17 @@ def get_cotacao(
     "/saldo",
     response_model=SaldoResponse,
     summary="Saldo da carteira (sats + BRL)",
-    description="Retorna o saldo da carteira da usuária em sats (consultado "
-    "no LNbits) e convertido pra BRL pela cotação atual. Em mock mode, "
-    "devolve um saldo de demo fixo.",
+    description="Retorna o saldo real da carteira da usuária em sats "
+    "(soma do histórico de transações confirmadas) e convertido pra BRL "
+    "pela cotação atual.",
 )
 def get_saldo(
     current_usuaria: Usuaria = Depends(get_current_usuaria),
+    db: Session = Depends(get_db),
 ):
     cotacao = exchange.cotacao_btc_brl()
     preco_brl = float(cotacao["price"])
-    saldo_sats = _saldo_sats_da_usuaria(current_usuaria)
+    saldo_sats = _saldo_sats_da_usuaria(db, current_usuaria)
     saldo_brl = saldo_sats / 100_000_000 * preco_brl
     return SaldoResponse(
         saldo_sats=saldo_sats,
@@ -210,7 +223,7 @@ def pagar(
         (payload.valor_centavos_brl / 100) / preco_brl * 100_000_000
     )
 
-    saldo_sats = _saldo_sats_da_usuaria(current_usuaria)
+    saldo_sats = _saldo_sats_da_usuaria(db, current_usuaria)
     if valor_sats > saldo_sats:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,

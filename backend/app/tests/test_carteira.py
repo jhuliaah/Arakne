@@ -14,7 +14,6 @@ Roda inteiro em mock mode (LNbits, Pix, Binance), mesmo padrão de test_pix.py.
 from app.models.transacao_carteira import TransacaoCarteira
 from app.models.usuaria import Usuaria
 from app.services.exchange import exchange
-from app.services.lnbits import lnbits
 from app.services.pix import pix
 
 
@@ -43,6 +42,31 @@ def _criar_usuaria_logada(client, pin="1234", pais=None):
     u = _criar_usuaria(client, pin=pin, pais=pais)
     token = _login(client, u["identificador"], pin=pin)
     return u, token, {"Authorization": f"Bearer {token}"}
+
+
+def _depositar_confirmado(client, headers, valor_centavos_brl):
+    """Deposita e confirma via webhook (fluxo real) — devolve o valor_sats
+    creditado. Usado por qualquer teste que precise de saldo real na
+    carteira, já que o saldo agora vem do ledger (TransacaoCarteira com
+    status='concluida'), não de um mock fixo — ver _saldo_sats_da_usuaria."""
+    resp = client.post(
+        "/carteira/depositar",
+        json={"valor_centavos_brl": valor_centavos_brl},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    txid = resp.json()["txid"]
+
+    mp_payment_id = next(k for k, v in pix._mock_txids.items() if v == txid)
+    webhook_resp = client.post(
+        "/pix/webhook", json={"type": "payment", "data": {"id": mp_payment_id}}
+    )
+    assert webhook_resp.status_code == 200
+
+    transacoes = client.get("/carteira/transacoes", headers=headers).json()
+    creditada = next(t for t in transacoes if t["txid"] == txid)
+    assert creditada["status"] == "concluida"
+    return creditada["valor_sats"]
 
 
 def _dar_aval(client, avalista_codigo, nova_ident):
@@ -84,17 +108,23 @@ def test_get_cotacao_sem_token_retorna_401(client, db_session):
 
 
 def test_get_saldo_retorna_sats_e_brl_convertido(client, db_session):
-    assert lnbits.is_mock
-    _, _, headers = _criar_usuaria_logada(client)
+    """Saldo vem do ledger (TransacaoCarteira concluída) — não de um valor
+    mock fixo. Sem nenhum depósito confirmado, começa em zero; depois de
+    um depósito confirmado via webhook, reflete o valor real creditado."""
+    _, _, headers = _criar_usuaria_logada(client, pais="BR")
+
+    resp = client.get("/carteira/saldo", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["saldo_sats"] == 0
+
+    valor_sats_creditado = _depositar_confirmado(client, headers, 15000)
 
     resp = client.get("/carteira/saldo", headers=headers)
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    # Em mock, saldo é 50.000 sats (definido em _SALDO_MOCK_SATS).
-    assert data["saldo_sats"] == 50_000
+    assert data["saldo_sats"] == valor_sats_creditado
     assert data["cotacao_btc_brl"] > 0
-    # saldo_brl = saldo_sats / 100_000_000 * cotacao
-    esperado_brl = 50_000 / 100_000_000 * data["cotacao_btc_brl"]
+    esperado_brl = valor_sats_creditado / 100_000_000 * data["cotacao_btc_brl"]
     assert abs(data["saldo_brl"] - round(esperado_brl, 2)) < 0.01
 
 
@@ -168,6 +198,10 @@ def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
     assert exchange.is_mock
     _, _, headers = _criar_usuaria_logada(client, pais="BR")
 
+    # Precisa de saldo real (confirmado) antes de conseguir pagar — não
+    # existe mais saldo fake de demo.
+    _depositar_confirmado(client, headers, 50000)  # R$ 500,00
+
     resp = client.post(
         "/carteira/pagar",
         json={
@@ -183,14 +217,15 @@ def test_post_pagar_aprova_em_mock_e_debita_sats(client, db_session):
     assert data["valor_centavos_brl"] == 5000
     assert data["valor_sats"] < 0  # saída: negativo
 
-    # TransacaoCarteira tipo=pagamento registrada como concluída.
+    # TransacaoCarteira tipo=pagamento registrada como concluída, além do
+    # depósito que já estava lá.
     transacoes = client.get("/carteira/transacoes", headers=headers).json()
-    assert len(transacoes) == 1
-    assert transacoes[0]["tipo"] == "pagamento"
-    assert transacoes[0]["valor_sats"] < 0
-    assert transacoes[0]["contraparte"] == "12345678901"
-    assert transacoes[0]["status"] == "concluida"
-    assert transacoes[0]["descricao"] == "material adquirido"
+    assert len(transacoes) == 2
+    pagamento = next(t for t in transacoes if t["tipo"] == "pagamento")
+    assert pagamento["valor_sats"] < 0
+    assert pagamento["contraparte"] == "12345678901"
+    assert pagamento["status"] == "concluida"
+    assert pagamento["descricao"] == "material adquirido"
 
 
 def test_post_pagar_sem_pais_br_retorna_403(client, db_session):
@@ -318,12 +353,8 @@ def test_get_transacoes_lista_ordem_desc(client, db_session):
     """Transações aparecem da mais recente pra mais antiga."""
     _, _, headers = _criar_usuaria_logada(client, pais="BR")
 
-    # Cria duas transações: um depósito e um pagamento.
-    client.post(
-        "/carteira/depositar",
-        json={"valor_centavos_brl": 10000},
-        headers=headers,
-    )
+    # Cria duas transações: um depósito confirmado e um pagamento.
+    _depositar_confirmado(client, headers, 10000)
     client.post(
         "/carteira/pagar",
         json={
